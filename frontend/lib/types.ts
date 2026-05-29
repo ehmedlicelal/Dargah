@@ -109,6 +109,7 @@ export interface ComplaintCreate {
   zone_id?: string;
   title: string;
   description: string;
+  priority?: "low" | "medium" | "high" | "critical";
   lat?: number;
   lng?: number;
 }

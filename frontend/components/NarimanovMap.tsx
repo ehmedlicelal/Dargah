@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import * as turf from "@turf/turf";
+import type { Complaint } from "@/lib/types";
 
 declare global {
   interface Window {
@@ -29,6 +30,46 @@ const DISTRICT_GEOJSON = {
 const district = turf.polygon([DISTRICT_COORDS]);
 const districtBbox = turf.bbox(district);
 const districtCentroid = turf.centroid(district);
+const outsideMask = turf.mask(district);
+
+const PRIORITY_COLORS: Record<string, string> = {
+  low: "#22c55e",
+  medium: "#3b82f6",
+  high: "#f97316",
+  critical: "#ef4444",
+};
+
+const PRIORITY_LABELS: Record<string, string> = {
+  low: "Aşağı",
+  medium: "Orta",
+  high: "Yüksək",
+  critical: "Kritik",
+};
+
+const STATUS_LABELS: Record<string, string> = {
+  open: "Açıq",
+  in_progress: "İcrada",
+  resolved: "Həll edilib",
+  closed: "Bağlı",
+};
+
+function buildComplaintsGeoJSON(complaints: Complaint[]) {
+  return {
+    type: "FeatureCollection" as const,
+    features: complaints
+      .filter((c) => c.lat != null && c.lng != null)
+      .map((c) => ({
+        type: "Feature" as const,
+        geometry: { type: "Point" as const, coordinates: [c.lng!, c.lat!] },
+        properties: {
+          id: c.id,
+          title: c.title,
+          priority: c.priority,
+          status: c.status,
+        },
+      })),
+  };
+}
 
 interface SearchResult {
   id: string;
@@ -66,13 +107,30 @@ function loadMapLibre(): Promise<void> {
   });
 }
 
-export default function NarimanovMap() {
-  // TODO: If you need to control the map externally, expose mapRef via forwardRef or a callback prop
+interface NarimanovMapProps {
+  complaints?: Complaint[];
+  onLocationSelect?: (lat: number, lng: number) => void;
+  selectedLocation?: { lat: number; lng: number } | null;
+}
+
+export default function NarimanovMap({
+  complaints = [],
+  onLocationSelect,
+  selectedLocation,
+}: NarimanovMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
   const markerRef = useRef<any>(null);
   const popupRef = useRef<any>(null);
+  const selectedMarkerRef = useRef<any>(null);
+  const complaintPopupRef = useRef<any>(null);
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mapLoadedRef = useRef(false);
+  const complaintsRef = useRef(complaints);
+  const onLocationSelectRef = useRef(onLocationSelect);
+
+  complaintsRef.current = complaints;
+  onLocationSelectRef.current = onLocationSelect;
 
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
@@ -126,6 +184,15 @@ export default function NarimanovMap() {
             },
           });
 
+          // Outside-district shade (world polygon with district cut out as hole)
+          map.addSource("district-mask", { type: "geojson", data: outsideMask });
+          map.addLayer({
+            id: "district-outside-shade",
+            type: "fill",
+            source: "district-mask",
+            paint: { "fill-color": "rgba(0, 0, 0, 0.38)", "fill-antialias": true },
+          });
+
           // District boundary overlay
           map.addSource("district", { type: "geojson", data: DISTRICT_GEOJSON });
           map.addLayer({
@@ -140,6 +207,80 @@ export default function NarimanovMap() {
             source: "district",
             paint: { "line-color": "#0078FF", "line-width": 2.5 },
           });
+
+          // Complaint markers — colored circles by priority
+          map.addSource("complaints", {
+            type: "geojson",
+            data: buildComplaintsGeoJSON(complaintsRef.current),
+          });
+          map.addLayer({
+            id: "complaint-circles",
+            type: "circle",
+            source: "complaints",
+            paint: {
+              "circle-radius": 9,
+              "circle-color": [
+                "match", ["get", "priority"],
+                "critical", "#ef4444",
+                "high",     "#f97316",
+                "medium",   "#3b82f6",
+                "low",      "#22c55e",
+                "#6b7280",
+              ],
+              "circle-stroke-width": 2,
+              "circle-stroke-color": "#ffffff",
+              "circle-opacity": 0.92,
+            },
+          });
+
+          // Popup on complaint click
+          map.on("click", "complaint-circles", (e: any) => {
+            const feature = e.features[0];
+            const props = feature.properties;
+            const coords: [number, number] = feature.geometry.coordinates;
+            const color = PRIORITY_COLORS[props.priority] ?? "#6b7280";
+            const priorityLabel = PRIORITY_LABELS[props.priority] ?? props.priority;
+            const statusLabel = STATUS_LABELS[props.status] ?? props.status;
+            complaintPopupRef.current?.remove();
+            complaintPopupRef.current = new window.maplibregl.Popup({ offset: 12 })
+              .setLngLat(coords)
+              .setHTML(
+                `<div style="font-family:system-ui,sans-serif;font-size:13px;max-width:220px;padding:2px 0">
+                  <div style="font-size:14px;font-weight:600;color:#111;margin-bottom:6px">${props.title}</div>
+                  <div style="display:flex;gap:6px;flex-wrap:wrap">
+                    <span style="background:${color}22;color:${color};border:1px solid ${color}55;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600">${priorityLabel}</span>
+                    <span style="background:#f3f4f6;color:#374151;padding:2px 8px;border-radius:12px;font-size:11px">${statusLabel}</span>
+                  </div>
+                </div>`
+              )
+              .addTo(map);
+          });
+
+          map.on("mouseenter", "complaint-circles", () => {
+            map.getCanvas().style.cursor = "pointer";
+          });
+          map.on("mouseleave", "complaint-circles", () => {
+            map.getCanvas().style.cursor = onLocationSelectRef.current ? "crosshair" : "";
+          });
+
+          // Location pick mode
+          if (onLocationSelectRef.current) {
+            map.getCanvas().style.cursor = "crosshair";
+          }
+
+          map.on("click", (e: any) => {
+            // Don't pick location when clicking an existing complaint marker
+            const hit = map.queryRenderedFeatures(e.point, { layers: ["complaint-circles"] });
+            if (hit.length > 0) return;
+            if (!onLocationSelectRef.current) return;
+            const { lng, lat } = e.lngLat;
+            const pt = turf.point([lng, lat]);
+            if (turf.booleanPointInPolygon(pt, district)) {
+              onLocationSelectRef.current(lat, lng);
+            }
+          });
+
+          mapLoadedRef.current = true;
         });
       })
       .catch(() => {});
@@ -149,10 +290,34 @@ export default function NarimanovMap() {
       if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
       markerRef.current?.remove();
       popupRef.current?.remove();
+      selectedMarkerRef.current?.remove();
+      complaintPopupRef.current?.remove();
       map?.remove();
       mapRef.current = null;
+      mapLoadedRef.current = false;
     };
   }, []);
+
+  // Sync complaint markers when the prop updates
+  useEffect(() => {
+    if (!mapLoadedRef.current || !mapRef.current) return;
+    try {
+      const source = mapRef.current.getSource("complaints");
+      if (source) source.setData(buildComplaintsGeoJSON(complaints));
+    } catch {}
+  }, [complaints]);
+
+  // Show/move the selected-location pin
+  useEffect(() => {
+    if (!mapRef.current || !window.maplibregl) return;
+    selectedMarkerRef.current?.remove();
+    selectedMarkerRef.current = null;
+    if (selectedLocation) {
+      selectedMarkerRef.current = new window.maplibregl.Marker({ color: "#0078FF" })
+        .setLngLat([selectedLocation.lng, selectedLocation.lat])
+        .addTo(mapRef.current);
+    }
+  }, [selectedLocation]);
 
   const handleSearch = useCallback((value: string) => {
     setQuery(value);
@@ -236,6 +401,9 @@ export default function NarimanovMap() {
         }</div>`
       )
       .addTo(mapRef.current);
+
+    // In pick mode, selecting a search result also sets the location
+    onLocationSelectRef.current?.(result.lat, result.lon);
 
     setQuery(result.name);
     setShowDropdown(false);
@@ -352,6 +520,28 @@ export default function NarimanovMap() {
           </div>
         )}
       </div>
+
+      {/* Pick-mode hint */}
+      {onLocationSelect && (
+        <div
+          style={{
+            position: "absolute",
+            bottom: 16,
+            left: "50%",
+            transform: "translateX(-50%)",
+            zIndex: 10,
+            background: "rgba(0,0,0,0.65)",
+            color: "#fff",
+            fontSize: 12,
+            padding: "6px 14px",
+            borderRadius: 20,
+            pointerEvents: "none",
+            whiteSpace: "nowrap",
+          }}
+        >
+          Rayon daxilində problemi olan yerə klikləyin
+        </div>
+      )}
 
       {/* Map container — parent controls dimensions; this fills 100% */}
       <div ref={containerRef} style={{ width: "100%", height: "100%" }} />

@@ -1,12 +1,16 @@
 from datetime import datetime
 from uuid import UUID
+from typing import Literal
 from pydantic import BaseModel, field_validator
+
+PriorityLevel = Literal["low", "medium", "high", "critical"]
 
 
 class ComplaintCreate(BaseModel):
     zone_id: UUID | None = None
     title: str
     description: str
+    priority: PriorityLevel | None = None
     lat: float | None = None
     lng: float | None = None
 

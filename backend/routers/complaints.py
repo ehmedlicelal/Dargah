@@ -46,7 +46,8 @@ async def create_complaint(
     ai_result = await ai_service.classify_complaint(body.title, body.description)
     update_payload = {
         "category": ai_result["category"],
-        "priority": ai_result["priority"],
+        # User-chosen priority takes precedence over AI classification
+        "priority": body.priority or ai_result["priority"],
     }
     if ai_result.get("ai_summary"):
         update_payload["ai_summary"] = ai_result["ai_summary"]
