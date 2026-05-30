@@ -3,8 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from supabase import Client
 from core.supabase_client import get_supabase
 from crud import complaints as crud
-from schemas.complaints import ComplaintCreate, ComplaintRead, ComplaintUpdate
-from services import ai_service
+from schemas.complaints import ComplaintRead, ComplaintUpdate
 
 router = APIRouter(prefix="/complaints", tags=["Complaints"])
 
@@ -29,31 +28,6 @@ def get_complaint(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Şikayət tapılmadı")
     return complaint
 
-
-@router.post("/", response_model=ComplaintRead, status_code=status.HTTP_201_CREATED)
-async def create_complaint(
-    body: ComplaintCreate,
-    supabase: Client = Depends(get_supabase),
-):
-    # TODO: extract user_id from Authorization header / Supabase session
-    insert_data = body.model_dump(exclude_none=True)
-    if insert_data.get("zone_id"):
-        insert_data["zone_id"] = str(insert_data["zone_id"])
-
-    created = crud.create_complaint(supabase, insert_data)
-
-    # AI classification — degrades gracefully on failure
-    ai_result = await ai_service.classify_complaint(body.title, body.description)
-    update_payload = {
-        "category": ai_result["category"],
-        # User-chosen priority takes precedence over AI classification
-        "priority": body.priority or ai_result["priority"],
-    }
-    if ai_result.get("ai_summary"):
-        update_payload["ai_summary"] = ai_result["ai_summary"]
-
-    enriched = crud.update_complaint(supabase, created["id"], update_payload)
-    return enriched or created
 
 
 @router.patch("/{complaint_id}", response_model=ComplaintRead)

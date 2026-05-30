@@ -7,13 +7,15 @@ router = APIRouter(prefix="/reports", tags=["Reports"])
 
 
 class ReportRequest(BaseModel):
-    submission_type: str        # Ərizə / Şikayət / Təklif
+    submission_type: str
     citizen_text: str
     full_name: Optional[str] = ""
     father_name: Optional[str] = ""
     address: Optional[str] = ""
     phone: Optional[str] = ""
-    image_url: Optional[str] = None   # base64 data URL or public URL
+    priority: Optional[str] = None
+    zone_name: Optional[str] = None
+    image_url: Optional[str] = None
 
 
 @router.post("/generate")
@@ -25,6 +27,8 @@ async def generate_report(body: ReportRequest):
         father_name=body.father_name or "",
         address=body.address or "",
         phone=body.phone or "",
+        priority=body.priority,
+        zone_name=body.zone_name,
         image_url=body.image_url,
     )
     return {"report": report}

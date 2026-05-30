@@ -54,3 +54,4 @@ class ComplaintUpdate(BaseModel):
     status: str | None = None
     priority: str | None = None
     category: str | None = None
+    report_content: str | None = None

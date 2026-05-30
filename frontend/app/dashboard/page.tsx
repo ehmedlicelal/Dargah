@@ -2,16 +2,15 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
-  analyzeComplaint, createComplaint, fetchComplaints, fetchZones,
-  generateReport, updateComplaint, type ReportRequest,
+  analyzeComplaint, fetchComplaints, fetchServices, fetchZones,
+  generateReport, updateComplaint, createComplaint, type ReportRequest,
 } from "@/lib/api";
 import type { AiAnalysis } from "@/lib/api";
-import type { Complaint, ComplaintCreate, DistrictZone } from "@/lib/types";
+import type { Complaint, ComplaintCreate, DistrictZone, Service } from "@/lib/types";
 import { supabase } from "@/lib/supabase";
 import Link from "next/link";
 import RoleGuard from "@/components/RoleGuard";
 
-// ── Submission types ──────────────────────────────────────────────────────────
 const SUBMISSION_TYPES = ["Şikayət", "Ərizə", "Təklif"] as const;
 
 const PRIORITY_OPTS = [
@@ -37,8 +36,14 @@ const PRIORITY_COLORS: Record<string, string> = {
 const PRIORITY_LABELS: Record<string, string> = {
   low: "Aşağı", medium: "Orta", high: "Yüksək", critical: "Kritik",
 };
+const CATEGORY_TO_SERVICE: Record<string, string[]> = {
+  road:        ["Yol", "İnfrastruktur", "road"],
+  utilities:   ["Kommunal", "Su", "Qaz", "utilities"],
+  environment: ["Ekologiya", "Yaşıllaşdırma", "environment"],
+  safety:      ["Təhlükəsizlik", "Polis", "safety"],
+  social:      ["Sosial", "social"],
+};
 
-// ── Report markdown renderer ──────────────────────────────────────────────────
 function ReportRenderer({ text }: { text: string }) {
   return (
     <div className="space-y-1 text-body-md leading-relaxed text-on-surface">
@@ -60,16 +65,47 @@ function ReportRenderer({ text }: { text: string }) {
   );
 }
 
-// ── Active tab type ───────────────────────────────────────────────────────────
+function ProgressTimeline({ status }: { status: string }) {
+  const steps = STATUS_OPTS;
+  const current = steps.indexOf(status as typeof steps[number]);
+  return (
+    <div className="flex items-start gap-0 mt-3 mb-1">
+      {steps.map((s, i) => (
+        <div key={s} className="flex flex-1 flex-col items-center">
+          <div className="flex w-full items-center">
+            {i > 0 && <div className={`flex-1 h-0.5 ${i <= current ? "bg-secondary" : "bg-outline-variant/40"}`} />}
+            <div className={`w-3 h-3 rounded-full border-2 shrink-0 transition-colors ${
+              i < current  ? "bg-secondary border-secondary" :
+              i === current ? "bg-secondary border-secondary ring-2 ring-secondary/30" :
+              "bg-surface border-outline-variant"
+            }`} />
+            {i < steps.length - 1 && <div className={`flex-1 h-0.5 ${i < current ? "bg-secondary" : "bg-outline-variant/40"}`} />}
+          </div>
+          <span className={`text-[10px] mt-1 text-center leading-tight ${i === current ? "text-secondary font-semibold" : "text-on-surface-variant"}`}>
+            {STATUS_LABELS[s]}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 type Tab = "complaints" | "submit" | "report";
 
-// ── Main dashboard component ──────────────────────────────────────────────────
 function DashboardContent() {
   const [tab, setTab]             = useState<Tab>("complaints");
   const [zones, setZones]         = useState<DistrictZone[]>([]);
   const [complaints, setComplaints] = useState<Complaint[]>([]);
+  const [services, setServices]   = useState<Service[]>([]);
   const [loadingData, setLoadingData] = useState(true);
   const [profile, setProfile]     = useState<{ full_name?: string | null; role?: string } | null>(null);
+
+  // Expanded complaint
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [editingPriority, setEditingPriority] = useState<Record<string, string>>({});
+  const [editingCategory, setEditingCategory] = useState<Record<string, string>>({});
+  const [directedService, setDirectedService] = useState<Record<string, string>>({});
+  const [savingExtra, setSavingExtra] = useState<string | null>(null);
 
   // Submit form state
   const [form, setForm]           = useState<ComplaintCreate>({ title: "", description: "", submission_type: "Şikayət" });
@@ -92,6 +128,8 @@ function DashboardContent() {
   const [rptFather, setRptFather]     = useState("");
   const [rptAddress, setRptAddress]   = useState("");
   const [rptPhone, setRptPhone]       = useState("");
+  const [rptPriority, setRptPriority] = useState<string>("");
+  const [rptZone, setRptZone]         = useState<string>("");
   const [rptImage, setRptImage]       = useState<string | null>(null);
   const [rptImageUrl, setRptImageUrl] = useState<string | null>(null);
   const rptImageRef = useRef<HTMLInputElement>(null);
@@ -103,7 +141,7 @@ function DashboardContent() {
   const [reportModal, setReportModal] = useState<{ open: boolean; report: string; title: string }>({ open: false, report: "", title: "" });
   const [reportLoading, setReportLoading] = useState<string | null>(null);
 
-  // Complaints filter
+  // Filter
   const [statusFilter, setStatusFilter] = useState<string>("all");
 
   useEffect(() => {
@@ -116,6 +154,7 @@ function DashboardContent() {
     Promise.all([
       fetchZones().then(setZones).catch(() => {}),
       fetchComplaints(undefined, 100).then(setComplaints).catch(() => {}),
+      fetchServices().then(setServices).catch(() => {}),
     ]).finally(() => setLoadingData(false));
   }, []);
 
@@ -131,7 +170,6 @@ function DashboardContent() {
     return () => { clearTimeout(t); setAnalyzing(false); };
   }, [form.title, form.description, imageDataUrl]);
 
-  // Stats
   const stats = {
     open:        complaints.filter(c => c.status === "open").length,
     in_progress: complaints.filter(c => c.status === "in_progress").length,
@@ -144,7 +182,6 @@ function DashboardContent() {
     ? complaints
     : complaints.filter(c => c.status === statusFilter);
 
-  // Submit complaint
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setSubmitError(null);
@@ -157,17 +194,22 @@ function DashboardContent() {
         citizen_father: citizenFather || undefined,
         citizen_phone:  citizenPhone  || undefined,
       });
+      // Apply AI category if suggestion was accepted
+      if (aiSuggestion?.category && created.id) {
+        await updateComplaint(created.id.toString(), { category: aiSuggestion.category }).catch(() => {});
+        created.category = aiSuggestion.category;
+      }
       setComplaints(prev => [created, ...prev]);
       setForm({ title: "", description: "", submission_type: "Şikayət" });
       setCitizenName(""); setCitizenFather(""); setCitizenPhone("");
       setImagePreview(null); setImageDataUrl(null); setAiSuggestion(null);
       setSubmitSuccess(true);
       setTimeout(() => { setSubmitSuccess(false); setTab("complaints"); }, 2000);
-    } catch { setSubmitError("Şikayət göndərilmədi. Yenidən cəhd edin."); }
-    finally { setSubmitting(false); }
+    } catch (err: unknown) {
+      setSubmitError(err instanceof Error ? err.message : "Şikayət göndərilmədi. Yenidən cəhd edin.");
+    } finally { setSubmitting(false); }
   }
 
-  // Image select (submit form)
   function handleImageSelect(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -177,7 +219,6 @@ function DashboardContent() {
     reader.readAsDataURL(file);
   }
 
-  // Status update
   async function handleStatusChange(id: string, status: string) {
     try {
       const updated = await updateComplaint(id, { status });
@@ -185,7 +226,31 @@ function DashboardContent() {
     } catch { alert("Status yenilənmədi."); }
   }
 
-  // Generate report from complaint
+  async function handleSaveExtras(c: Complaint) {
+    setSavingExtra(c.id.toString());
+    try {
+      const patch: Record<string, string> = {};
+      if (editingPriority[c.id]) patch.priority = editingPriority[c.id];
+      if (editingCategory[c.id]) patch.category = editingCategory[c.id];
+
+      // Store directed service in report_content
+      const svcId = directedService[c.id];
+      if (svcId) {
+        const svc = services.find(s => s.id === svcId);
+        patch.report_content = JSON.stringify({
+          directed_service_id: svcId,
+          directed_service_name: svc?.name_az ?? svc?.name ?? "",
+        });
+      }
+
+      if (Object.keys(patch).length > 0) {
+        const updated = await updateComplaint(c.id.toString(), patch);
+        setComplaints(prev => prev.map(x => x.id === c.id ? updated : x));
+      }
+    } catch { alert("Yeniləmə uğursuz oldu."); }
+    finally { setSavingExtra(null); }
+  }
+
   async function handleGenerateReport(c: Complaint) {
     setReportLoading(c.id.toString());
     try {
@@ -195,28 +260,35 @@ function DashboardContent() {
         full_name:       (c as any).citizen_name   ?? "",
         father_name:     (c as any).citizen_father ?? "",
         phone:           (c as any).citizen_phone  ?? "",
+        priority:        c.priority,
       });
       setReportModal({ open: true, report: result.report, title: c.title });
     } catch { alert("Hesabat hazırlanarkən xəta baş verdi."); }
     finally { setReportLoading(null); }
   }
 
-  // Generate AI report (standalone)
   async function handleGenerateStandalone(e: React.FormEvent) {
     e.preventDefault();
     if (!rptText.trim()) { setRptError("Müraciət mətnini daxil edin."); return; }
     setRptError(null); setReport(null); setGenerating(true);
     try {
+      const zone = zones.find(z => z.id === rptZone);
       const payload: ReportRequest = {
-        submission_type: rptType, citizen_text: rptText,
-        full_name: rptName, father_name: rptFather,
-        address: rptAddress, phone: rptPhone,
+        submission_type: rptType,
+        citizen_text: rptText,
+        full_name: rptName,
+        father_name: rptFather,
+        address: rptAddress,
+        phone: rptPhone,
+        priority: rptPriority || undefined,
+        zone_name: zone?.name_az || undefined,
         image_url: rptImageUrl ?? undefined,
       };
       const result = await generateReport(payload);
       setReport(result.report);
-    } catch { setRptError("Hesabat hazırlanarkən xəta baş verdi."); }
-    finally { setGenerating(false); }
+    } catch (err: unknown) {
+      setRptError(err instanceof Error ? err.message : "Hesabat hazırlanarkən xəta baş verdi. Backend serverinin işlədiyini yoxlayın.");
+    } finally { setGenerating(false); }
   }
 
   function handleRptImageSelect(e: React.ChangeEvent<HTMLInputElement>) {
@@ -228,17 +300,40 @@ function DashboardContent() {
     reader.readAsDataURL(file);
   }
 
+  function getMatchingServices(complaint: Complaint): Service[] {
+    if (!complaint.category) return services.slice(0, 5);
+    const keywords = CATEGORY_TO_SERVICE[complaint.category] ?? [];
+    const matched = services.filter(s =>
+      keywords.some(kw =>
+        (s.name_az ?? s.name ?? "").toLowerCase().includes(kw.toLowerCase()) ||
+        (s.category ?? "").toLowerCase().includes(kw.toLowerCase())
+      )
+    );
+    return matched.length > 0 ? matched : services.slice(0, 5);
+  }
+
+  function getDirectedServiceName(c: Complaint): string | null {
+    try {
+      const rc = (c as any).report_content;
+      if (rc) {
+        const parsed = JSON.parse(rc);
+        return parsed.directed_service_name ?? null;
+      }
+    } catch { /* */ }
+    return null;
+  }
+
   const TABS: { key: Tab; label: string; icon: string }[] = [
-    { key: "complaints", label: "Şikayətlər",  icon: "assignment" },
-    { key: "submit",     label: "Yeni Müraciət",icon: "add_circle" },
-    { key: "report",     label: "Hesabat Yarat", icon: "description"},
+    { key: "complaints", label: "Şikayətlər",   icon: "assignment" },
+    { key: "submit",     label: "Yeni Müraciət", icon: "add_circle" },
+    { key: "report",     label: "Hesabat Yarat",  icon: "description" },
   ];
 
   return (
     <div className="min-h-screen bg-background pb-xl">
       <div className="max-w-8xl mx-auto px-margin-mobile md:px-margin-desktop py-md">
 
-        {/* ── Header ─────────────────────────────────────────────────────── */}
+        {/* Header */}
         <div className="mb-md flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
             <h1 className="text-headline-lg font-bold text-on-surface">
@@ -262,13 +357,13 @@ function DashboardContent() {
           </div>
         </div>
 
-        {/* ── Stats ──────────────────────────────────────────────────────── */}
+        {/* Stats */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-gutter mb-md">
           {[
-            { label: "Açıq",        count: stats.open,        icon: "inbox",        accent: "text-secondary"        },
-            { label: "İcrada",       count: stats.in_progress, icon: "autorenew",   accent: "text-primary-container" },
-            { label: "Həll edildi",  count: stats.resolved,    icon: "check_circle", accent: "text-secondary"        },
-            { label: "Bağlı",        count: stats.closed,      icon: "archive",      accent: "text-on-surface-variant"},
+            { label: "Açıq",       count: stats.open,        icon: "inbox",        accent: "text-secondary"         },
+            { label: "İcrada",      count: stats.in_progress, icon: "autorenew",    accent: "text-primary-container" },
+            { label: "Həll edildi", count: stats.resolved,    icon: "check_circle", accent: "text-secondary"         },
+            { label: "Bağlı",       count: stats.closed,      icon: "archive",      accent: "text-on-surface-variant"},
           ].map(({ label, count, icon, accent }) => (
             <div key={label} className="bg-surface-container-lowest border border-primary-container/10 rounded-lg p-md flex items-center gap-4">
               <span className={`material-symbols-outlined text-3xl filled ${accent}`}>{icon}</span>
@@ -280,7 +375,7 @@ function DashboardContent() {
           ))}
         </div>
 
-        {/* ── Tabs ───────────────────────────────────────────────────────── */}
+        {/* Tabs */}
         <div className="flex gap-1 border-b border-outline-variant/30 mb-md">
           {TABS.map(({ key, label, icon }) => (
             <button key={key} onClick={() => setTab(key)}
@@ -296,7 +391,7 @@ function DashboardContent() {
           ))}
         </div>
 
-        {/* ── Tab: Complaints ────────────────────────────────────────────── */}
+        {/* ── Tab: Complaints ── */}
         {tab === "complaints" && (
           <div className="flex flex-col gap-4">
             {/* Filter bar */}
@@ -314,7 +409,6 @@ function DashboardContent() {
               ))}
             </div>
 
-            {/* Complaints table */}
             {loadingData ? (
               <div className="flex items-center justify-center py-16">
                 <div className="w-8 h-8 border-4 border-secondary border-t-transparent rounded-full animate-spin" />
@@ -326,73 +420,198 @@ function DashboardContent() {
               </div>
             ) : (
               <div className="flex flex-col gap-3">
-                {filteredComplaints.map((c) => (
-                  <div key={c.id} className="bg-surface-container-lowest border border-primary-container/10 rounded-lg p-md hover:shadow-sm transition-shadow">
-                    <div className="flex items-start justify-between gap-4 flex-wrap">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap mb-1">
-                          <span className={`inline-flex items-center gap-1 text-label-sm px-2 py-0.5 rounded-full ${STATUS_COLORS[c.status]}`}>
-                            {STATUS_LABELS[c.status]}
-                          </span>
-                          {c.priority && (
-                            <span className="text-label-sm px-2 py-0.5 rounded-full bg-surface-container text-on-surface-variant flex items-center gap-1">
-                              <span className="w-1.5 h-1.5 rounded-full inline-block" style={{ backgroundColor: PRIORITY_COLORS[c.priority] }} />
-                              {PRIORITY_LABELS[c.priority]}
-                            </span>
-                          )}
-                          {(c as any).submission_type && (
-                            <span className="text-label-sm text-on-surface-variant">{(c as any).submission_type}</span>
-                          )}
+                {filteredComplaints.map(c => {
+                  const isExpanded = expandedId === c.id.toString();
+                  const matchedServices = getMatchingServices(c);
+                  const directedName = getDirectedServiceName(c);
+
+                  return (
+                    <div key={c.id} className="bg-surface-container-lowest border border-primary-container/10 rounded-lg overflow-hidden hover:shadow-sm transition-shadow">
+                      {/* Card header row */}
+                      <div className="p-md">
+                        <div className="flex items-start justify-between gap-4 flex-wrap">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap mb-1">
+                              <span className={`inline-flex items-center gap-1 text-label-sm px-2 py-0.5 rounded-full ${STATUS_COLORS[c.status]}`}>
+                                {STATUS_LABELS[c.status]}
+                              </span>
+                              {c.priority && (
+                                <span className="text-label-sm px-2 py-0.5 rounded-full bg-surface-container text-on-surface-variant flex items-center gap-1">
+                                  <span className="w-1.5 h-1.5 rounded-full inline-block" style={{ backgroundColor: PRIORITY_COLORS[c.priority] }} />
+                                  {PRIORITY_LABELS[c.priority]}
+                                </span>
+                              )}
+                              {(c as any).submission_type && (
+                                <span className="text-label-sm text-on-surface-variant">{(c as any).submission_type}</span>
+                              )}
+                              {c.category && (
+                                <span className="text-label-sm bg-secondary-container/20 text-secondary px-2 py-0.5 rounded-full">{c.category}</span>
+                              )}
+                              {directedName && (
+                                <span className="text-label-sm bg-primary-container/20 text-primary px-2 py-0.5 rounded-full flex items-center gap-1">
+                                  <span className="material-symbols-outlined text-[12px]">send</span>
+                                  {directedName}
+                                </span>
+                              )}
+                            </div>
+                            <h3 className="text-label-md text-on-surface font-semibold truncate">{c.title}</h3>
+                            <p className="text-body-md text-on-surface-variant mt-1 line-clamp-2">{c.description}</p>
+                            {(c as any).citizen_name && (
+                              <p className="text-label-sm text-on-surface-variant mt-1">
+                                <span className="material-symbols-outlined text-[14px] align-middle mr-1">person</span>
+                                {(c as any).citizen_name}
+                                {(c as any).citizen_phone && ` · ${(c as any).citizen_phone}`}
+                              </p>
+                            )}
+                            <p className="text-label-sm text-outline mt-2">
+                              {new Date(c.created_at).toLocaleDateString("az-AZ", { day: "2-digit", month: "long", year: "numeric" })}
+                            </p>
+                          </div>
+
+                          <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                            <select
+                              value={c.status}
+                              onChange={e => handleStatusChange(c.id.toString(), e.target.value)}
+                              className="text-label-sm border border-primary-container/20 rounded px-2 py-1 bg-surface-container-lowest text-on-surface focus:outline-none focus:border-secondary"
+                            >
+                              {STATUS_OPTS.map(s => (
+                                <option key={s} value={s}>{STATUS_LABELS[s]}</option>
+                              ))}
+                            </select>
+
+                            <button
+                              onClick={() => handleGenerateReport(c)}
+                              disabled={reportLoading === c.id.toString()}
+                              className="flex items-center gap-1.5 text-label-sm border border-primary-container/20 text-on-surface-variant px-3 py-1 rounded hover:border-secondary hover:text-secondary transition-colors disabled:opacity-50"
+                            >
+                              {reportLoading === c.id.toString()
+                                ? <span className="material-symbols-outlined text-[16px] animate-spin">autorenew</span>
+                                : <span className="material-symbols-outlined text-[16px]">description</span>
+                              }
+                              Hesabat
+                            </button>
+
+                            <button
+                              onClick={() => setExpandedId(isExpanded ? null : c.id.toString())}
+                              className="flex items-center gap-1 text-label-sm border border-primary-container/20 text-on-surface-variant px-3 py-1 rounded hover:border-secondary hover:text-secondary transition-colors"
+                            >
+                              <span className="material-symbols-outlined text-[16px]">
+                                {isExpanded ? "expand_less" : "expand_more"}
+                              </span>
+                              {isExpanded ? "Bağla" : "Ətraflı"}
+                            </button>
+                          </div>
                         </div>
-                        <h3 className="text-label-md text-on-surface font-semibold truncate">{c.title}</h3>
-                        <p className="text-body-md text-on-surface-variant mt-1 line-clamp-2">{c.description}</p>
-                        {(c as any).citizen_name && (
-                          <p className="text-label-sm text-on-surface-variant mt-1">
-                            <span className="material-symbols-outlined text-[14px] align-middle mr-1">person</span>
-                            {(c as any).citizen_name}
-                            {(c as any).citizen_phone && ` · ${(c as any).citizen_phone}`}
-                          </p>
-                        )}
-                        <p className="text-label-sm text-outline mt-2">
-                          {new Date(c.created_at).toLocaleDateString("az-AZ", { day: "2-digit", month: "long", year: "numeric" })}
-                        </p>
                       </div>
 
-                      <div className="flex items-center gap-2 shrink-0 flex-wrap">
-                        {/* Status select */}
-                        <select
-                          value={c.status}
-                          onChange={e => handleStatusChange(c.id.toString(), e.target.value)}
-                          className="text-label-sm border border-primary-container/20 rounded px-2 py-1 bg-surface-container-lowest text-on-surface focus:outline-none focus:border-secondary"
-                        >
-                          {STATUS_OPTS.map(s => (
-                            <option key={s} value={s}>{STATUS_LABELS[s]}</option>
-                          ))}
-                        </select>
+                      {/* Expanded panel */}
+                      {isExpanded && (
+                        <div className="border-t border-outline-variant/20 bg-surface-container-low/30 p-md flex flex-col gap-md">
 
-                        {/* Report button */}
-                        <button
-                          onClick={() => handleGenerateReport(c)}
-                          disabled={reportLoading === c.id.toString()}
-                          className="flex items-center gap-1.5 text-label-sm border border-primary-container/20 text-on-surface-variant px-3 py-1 rounded hover:border-secondary hover:text-secondary transition-colors disabled:opacity-50"
-                        >
-                          {reportLoading === c.id.toString() ? (
-                            <span className="material-symbols-outlined text-[16px] animate-spin">autorenew</span>
-                          ) : (
-                            <span className="material-symbols-outlined text-[16px]">description</span>
+                          {/* Progress timeline */}
+                          <div>
+                            <p className="text-label-sm text-on-surface-variant mb-1 font-semibold">İcra Prosesi</p>
+                            <ProgressTimeline status={c.status} />
+                          </div>
+
+                          {/* AI summary */}
+                          {c.ai_summary && (
+                            <div className="rounded border border-secondary-container bg-secondary-container/10 p-sm">
+                              <p className="text-label-sm font-semibold text-secondary mb-1 flex items-center gap-1">
+                                <span className="material-symbols-outlined text-[14px] filled">auto_awesome</span>
+                                AI Xülasə
+                              </p>
+                              <p className="text-label-sm text-on-surface-variant">{c.ai_summary}</p>
+                            </div>
                           )}
-                          Hesabat
-                        </button>
-                      </div>
+
+                          {/* Edit priority + category */}
+                          <div className="grid grid-cols-2 gap-3">
+                            <div>
+                              <label className="block text-label-sm text-on-surface-variant mb-1">Kritiklik Səviyyəsi</label>
+                              <select
+                                value={editingPriority[c.id] ?? c.priority}
+                                onChange={e => setEditingPriority(prev => ({ ...prev, [c.id]: e.target.value }))}
+                                className="w-full text-label-sm border border-primary-container/20 rounded px-2 py-1.5 bg-surface-container-lowest text-on-surface focus:outline-none focus:border-secondary"
+                              >
+                                {PRIORITY_OPTS.map(p => (
+                                  <option key={p.value} value={p.value}>{p.label}</option>
+                                ))}
+                              </select>
+                            </div>
+                            <div>
+                              <label className="block text-label-sm text-on-surface-variant mb-1">Kateqoriya</label>
+                              <select
+                                value={editingCategory[c.id] ?? c.category ?? ""}
+                                onChange={e => setEditingCategory(prev => ({ ...prev, [c.id]: e.target.value }))}
+                                className="w-full text-label-sm border border-primary-container/20 rounded px-2 py-1.5 bg-surface-container-lowest text-on-surface focus:outline-none focus:border-secondary"
+                              >
+                                <option value="">Kateqoriya seçin</option>
+                                {["road", "utilities", "environment", "safety", "social", "other"].map(cat => (
+                                  <option key={cat} value={cat}>{cat}</option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
+
+                          {/* Direct to service */}
+                          <div>
+                            <p className="text-label-sm font-semibold text-on-surface mb-2 flex items-center gap-1">
+                              <span className="material-symbols-outlined text-[16px]">send</span>
+                              Xidmətə Yönləndir
+                            </p>
+                            {matchedServices.length === 0 ? (
+                              <p className="text-label-sm text-on-surface-variant">Uyğun xidmət tapılmadı</p>
+                            ) : (
+                              <div className="flex flex-col gap-2">
+                                <select
+                                  value={directedService[c.id] ?? ""}
+                                  onChange={e => setDirectedService(prev => ({ ...prev, [c.id]: e.target.value }))}
+                                  className="w-full text-label-sm border border-primary-container/20 rounded px-2 py-1.5 bg-surface-container-lowest text-on-surface focus:outline-none focus:border-secondary"
+                                >
+                                  <option value="">Xidmət seçin</option>
+                                  {matchedServices.map(s => (
+                                    <option key={s.id} value={s.id}>{s.name_az ?? s.name}</option>
+                                  ))}
+                                </select>
+                                {directedService[c.id] && (() => {
+                                  const svc = services.find(s => s.id === directedService[c.id]);
+                                  return svc ? (
+                                    <div className="rounded border border-primary-container/20 bg-surface-container-lowest p-sm text-label-sm text-on-surface-variant space-y-0.5">
+                                      {svc.contact_phone && <p><span className="material-symbols-outlined text-[13px] align-middle mr-1">call</span>{svc.contact_phone}</p>}
+                                      {svc.contact_email && <p><span className="material-symbols-outlined text-[13px] align-middle mr-1">mail</span>{svc.contact_email}</p>}
+                                      {svc.working_hours && <p><span className="material-symbols-outlined text-[13px] align-middle mr-1">schedule</span>{svc.working_hours}</p>}
+                                    </div>
+                                  ) : null;
+                                })()}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Save button */}
+                          <div className="flex justify-end">
+                            <button
+                              onClick={() => handleSaveExtras(c)}
+                              disabled={savingExtra === c.id.toString()}
+                              className="flex items-center gap-2 bg-secondary text-on-secondary text-label-sm px-4 py-1.5 rounded hover:bg-secondary/90 transition-colors disabled:opacity-60"
+                            >
+                              {savingExtra === c.id.toString()
+                                ? <><span className="material-symbols-outlined text-[16px] animate-spin">autorenew</span>Saxlanılır...</>
+                                : <><span className="material-symbols-outlined text-[16px]">save</span>Dəyişiklikləri Saxla</>
+                              }
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
         )}
 
-        {/* ── Tab: Submit ────────────────────────────────────────────────── */}
+        {/* ── Tab: Submit ── */}
         {tab === "submit" && (
           <div className="max-w-2xl">
             <form onSubmit={handleSubmit} className="flex flex-col gap-md bg-surface-container-lowest border border-primary-container/10 rounded-lg p-md">
@@ -426,8 +645,7 @@ function DashboardContent() {
                     <div key={label} className={span ? "col-span-2" : ""}>
                       <label className="block text-label-sm text-on-surface-variant mb-xs">{label}</label>
                       <input type="text" value={val} onChange={e => set(e.target.value)} placeholder={ph}
-                        className="w-full border border-primary-container/20 rounded px-sm py-xs text-body-md text-on-surface bg-surface-container focus:outline-none focus:border-secondary transition-colors placeholder:text-on-surface-variant"
-                      />
+                        className="w-full border border-primary-container/20 rounded px-sm py-xs text-body-md text-on-surface bg-surface-container focus:outline-none focus:border-secondary transition-colors placeholder:text-on-surface-variant" />
                     </div>
                   ))}
                 </div>
@@ -551,11 +769,12 @@ function DashboardContent() {
           </div>
         )}
 
-        {/* ── Tab: Report Generator ──────────────────────────────────────── */}
+        {/* ── Tab: Report Generator ── */}
         {tab === "report" && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-md">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-md items-start">
             {/* Form */}
             <form onSubmit={handleGenerateStandalone} className="flex flex-col gap-md bg-surface-container-lowest border border-primary-container/10 rounded-lg p-md">
+              {/* Submission type */}
               <div className="flex flex-col gap-xs">
                 <label className="text-label-sm text-on-surface">Müraciət Növü</label>
                 <div className="flex gap-2">
@@ -568,12 +787,13 @@ function DashboardContent() {
                 </div>
               </div>
 
+              {/* Citizen info */}
               <div className="grid grid-cols-2 gap-2">
                 {[
-                  { label: "Ad Soyad", val: rptName,   set: setRptName,   ph: "Əli Əliyev" },
-                  { label: "Ata adı",  val: rptFather, set: setRptFather, ph: "Həsən" },
+                  { label: "Ad Soyad", val: rptName,    set: setRptName,    ph: "Əli Əliyev" },
+                  { label: "Ata adı",  val: rptFather,  set: setRptFather,  ph: "Həsən" },
                   { label: "Ünvan",    val: rptAddress, set: setRptAddress, ph: "Koroğlu küç. 12" },
-                  { label: "Telefon",  val: rptPhone,  set: setRptPhone,  ph: "+994 50 XXX XX XX" },
+                  { label: "Telefon",  val: rptPhone,   set: setRptPhone,   ph: "+994 50 XXX XX XX" },
                 ].map(({ label, val, set, ph }) => (
                   <div key={label}>
                     <label className="block text-label-sm text-on-surface-variant mb-xs">{label}</label>
@@ -583,6 +803,29 @@ function DashboardContent() {
                 ))}
               </div>
 
+              {/* Priority + Zone */}
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-label-sm text-on-surface-variant mb-xs">Kritiklik Səviyyəsi</label>
+                  <select value={rptPriority} onChange={e => setRptPriority(e.target.value)}
+                    className="w-full border border-primary-container/20 rounded px-sm py-xs text-body-md text-on-surface bg-surface-container focus:outline-none focus:border-secondary">
+                    <option value="">Seçin (ixtiyari)</option>
+                    {PRIORITY_OPTS.map(p => (
+                      <option key={p.value} value={p.value}>{p.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-label-sm text-on-surface-variant mb-xs">Zona</label>
+                  <select value={rptZone} onChange={e => setRptZone(e.target.value)}
+                    className="w-full border border-primary-container/20 rounded px-sm py-xs text-body-md text-on-surface bg-surface-container focus:outline-none focus:border-secondary">
+                    <option value="">Seçin (ixtiyari)</option>
+                    {zones.map(z => <option key={z.id} value={z.id}>{z.name_az}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              {/* Citizen text */}
               <div className="flex flex-col gap-xs">
                 <label className="text-label-sm text-on-surface">Müraciətin Məzmunu *</label>
                 <textarea required rows={7} value={rptText} onChange={e => setRptText(e.target.value)}
@@ -610,7 +853,12 @@ function DashboardContent() {
                 <input ref={rptImageRef} type="file" accept="image/*" className="hidden" onChange={handleRptImageSelect} />
               </div>
 
-              {rptError && <p className="text-label-sm text-error bg-error-container/30 rounded px-sm py-xs">{rptError}</p>}
+              {rptError && (
+                <div className="flex items-start gap-2 text-label-sm text-error bg-error-container/30 border border-error/20 rounded px-sm py-xs">
+                  <span className="material-symbols-outlined text-[16px] shrink-0 mt-0.5">error</span>
+                  {rptError}
+                </div>
+              )}
 
               <div className="flex gap-3">
                 <button type="submit" disabled={generating || !rptText.trim()}
@@ -622,7 +870,7 @@ function DashboardContent() {
                   )}
                 </button>
                 {report && (
-                  <button type="button" onClick={() => { setReport(null); setRptText(""); setRptName(""); setRptFather(""); setRptAddress(""); setRptPhone(""); }}
+                  <button type="button" onClick={() => { setReport(null); setRptText(""); setRptName(""); setRptFather(""); setRptAddress(""); setRptPhone(""); setRptPriority(""); setRptZone(""); }}
                     className="px-4 py-sm border border-primary-container/20 text-on-surface-variant rounded text-label-md hover:bg-surface-container-low transition-colors">
                     Yenilə
                   </button>
@@ -630,17 +878,17 @@ function DashboardContent() {
               </div>
             </form>
 
-            {/* Report output */}
-            <div>
+            {/* Preview panel */}
+            <div className="flex flex-col min-h-64">
               {!report && !generating && (
-                <div className="h-full min-h-64 flex flex-col items-center justify-center bg-surface-container-low border border-dashed border-primary-container/20 rounded-lg p-8 text-center">
+                <div className="flex-1 min-h-64 flex flex-col items-center justify-center bg-surface-container-low border border-dashed border-primary-container/20 rounded-lg p-8 text-center">
                   <span className="material-symbols-outlined text-5xl text-outline mb-3 block">description</span>
                   <p className="text-label-md text-on-surface-variant">Hesabat burada görünəcək</p>
                   <p className="text-label-sm text-outline mt-1">Formu doldurun və AI Hesabat Yarat düyməsinə basın</p>
                 </div>
               )}
               {generating && (
-                <div className="h-full min-h-64 flex flex-col items-center justify-center bg-secondary-container/10 border border-secondary/20 rounded-lg p-8 text-center">
+                <div className="flex-1 min-h-64 flex flex-col items-center justify-center bg-secondary-container/10 border border-secondary/20 rounded-lg p-8 text-center">
                   <span className="material-symbols-outlined text-5xl text-secondary animate-spin mb-3 block">autorenew</span>
                   <p className="text-label-md text-secondary font-semibold">AI hesabat hazırlayır...</p>
                   <p className="text-label-sm text-on-surface-variant mt-1">Bu 15–30 saniyə çəkə bilər</p>
@@ -648,7 +896,6 @@ function DashboardContent() {
               )}
               {report && (
                 <div className="bg-surface-container-lowest border border-primary-container/10 rounded-lg overflow-hidden">
-                  {/* Toolbar */}
                   <div className="flex items-center justify-between px-md py-sm border-b border-outline-variant/20 bg-surface-container-low">
                     <div className="flex items-center gap-2">
                       <span className="w-2 h-2 rounded-full bg-secondary" />
@@ -667,14 +914,12 @@ function DashboardContent() {
                       </button>
                     </div>
                   </div>
-                  {/* Letterhead */}
                   <div className="px-md pt-md pb-sm border-b border-outline-variant/20 text-center">
                     <p className="text-label-sm text-on-surface-variant uppercase tracking-widest">Azərbaycan Respublikası</p>
                     <p className="text-label-md font-bold text-on-surface">Bakı şəhəri Nərimanov Rayon İcra Hakimiyyəti</p>
                     <p className="text-label-sm text-on-surface-variant">Rəsmi Müraciət Hesabatı</p>
                   </div>
-                  {/* Body */}
-                  <div className="px-md py-md">
+                  <div className="px-md py-md max-h-[70vh] overflow-y-auto">
                     <ReportRenderer text={report} />
                   </div>
                   <div className="px-md pb-md border-t border-outline-variant/20 pt-sm">
@@ -689,7 +934,7 @@ function DashboardContent() {
         )}
       </div>
 
-      {/* ── Report Modal (from complaint) ─────────────────────────────────── */}
+      {/* Report Modal */}
       {reportModal.open && (
         <div className="fixed inset-0 z-50 flex items-start justify-center bg-primary/50 p-4 overflow-y-auto backdrop-blur-sm">
           <div className="bg-surface-container-lowest rounded-xl border border-primary-container/10 shadow-2xl w-full max-w-3xl my-8">

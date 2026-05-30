@@ -6,6 +6,29 @@ from schemas.auth import TokenVerifyRequest, UserProfile
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
 
+@router.get("/users")
+def list_all_users(supabase: Client = Depends(get_supabase)):
+    """Admin endpoint: returns all users with email from auth.users + profile data."""
+    try:
+        auth_response = supabase.auth.admin.list_users()
+        auth_map: dict[str, str | None] = {
+            str(u.id): u.email for u in (auth_response or [])
+        }
+    except Exception:
+        auth_map = {}
+
+    profiles = (
+        supabase.table("users")
+        .select("id, full_name, role, phone, created_at")
+        .order("created_at", desc=True)
+        .execute()
+        .data or []
+    )
+    for p in profiles:
+        p["email"] = auth_map.get(p["id"])
+    return profiles
+
+
 def _get_user_profile(supabase: Client, token: str) -> UserProfile:
     try:
         auth_response = supabase.auth.get_user(token)

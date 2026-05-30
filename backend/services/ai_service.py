@@ -239,18 +239,23 @@ async def generate_official_report(
     father_name: str = "",
     address: str = "",
     phone: str = "",
+    priority: str | None = None,
+    zone_name: str | None = None,
     image_url: str | None = None,
 ) -> str:
     """Generate a structured official Azerbaijani government report from a citizen submission."""
     import datetime
     today = datetime.date.today().strftime("%d.%m.%Y")
 
+    priority_labels = {"low": "Aşağı", "medium": "Orta", "high": "Yüksək", "critical": "Kritik"}
     user_text = f"""Submission Type: {submission_type}
 Tarix: {today}
 Ad Soyad: {full_name or "Göstərilməyib"}
 Ata adı: {father_name or "Göstərilməyib"}
 Ünvan: {address or "Göstərilməyib"}
 Telefon: {phone or "Göstərilməyib"}
+Prioritet: {priority_labels.get(priority, priority) if priority else "Göstərilməyib"}
+Zona: {zone_name or "Göstərilməyib"}
 
 Full citizen text:
 {citizen_text}"""

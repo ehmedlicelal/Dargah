@@ -6,6 +6,7 @@ import type {
   Service,
   OpenDataReport,
 } from "./types";
+import { supabase } from "./supabase";
 
 export interface AiAnalysis {
   category: string;
@@ -68,16 +69,34 @@ export function fetchComplaint(id: string): Promise<Complaint> {
   return apiFetch(`/complaints/${id}`);
 }
 
-export function createComplaint(data: ComplaintCreate): Promise<Complaint> {
-  return apiFetch("/complaints/", {
-    method: "POST",
-    body: JSON.stringify(data),
-  });
+export async function createComplaint(data: ComplaintCreate): Promise<Complaint> {
+  const { data: { user } } = await supabase.auth.getUser();
+  const { data: result, error } = await supabase
+    .from("complaints")
+    .insert({
+      title: data.title,
+      description: data.description,
+      priority: data.priority ?? "medium",
+      zone_id: data.zone_id ?? null,
+      submission_type: data.submission_type ?? "Şikayət",
+      citizen_name: data.citizen_name ?? null,
+      citizen_father: data.citizen_father ?? null,
+      citizen_phone: data.citizen_phone ?? null,
+      lat: data.lat ?? null,
+      lng: data.lng ?? null,
+      attachments: data.attachments ?? null,
+      user_id: user?.id ?? null,
+      status: "open",
+    })
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+  return result as Complaint;
 }
 
 export function updateComplaint(
   id: string,
-  data: { status?: string; priority?: string; category?: string },
+  data: { status?: string; priority?: string; category?: string; report_content?: string },
 ): Promise<Complaint> {
   return apiFetch(`/complaints/${id}`, {
     method: "PATCH",
@@ -94,7 +113,20 @@ export function fetchZoneDetail(id: string): Promise<DistrictZone & { latest_air
 }
 
 export function fetchServices(): Promise<Service[]> {
-  return apiFetch("/open-data/");
+  return apiFetch("/services/");
+}
+
+export interface UserRow {
+  id: string;
+  full_name: string | null;
+  role: "citizen" | "operator" | "admin";
+  phone: string | null;
+  email: string | null;
+  created_at: string;
+}
+
+export function fetchUsers(): Promise<UserRow[]> {
+  return apiFetch("/auth/users");
 }
 
 export function fetchOpenDataReports(): Promise<OpenDataReport[]> {
@@ -152,6 +184,8 @@ export interface ReportRequest {
   father_name?: string;
   address?: string;
   phone?: string;
+  priority?: string;
+  zone_name?: string;
   image_url?: string;
 }
 
