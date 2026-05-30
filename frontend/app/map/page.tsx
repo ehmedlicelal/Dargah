@@ -6,7 +6,7 @@ import mapboxgl from "mapbox-gl";
 import {
   fetchAirQuality, fetchComplaints, fetchIncidents,
   fetchTraffic, fetchUtilities, fetchZoneDetail, fetchZones,
-  fetchNamedBuilding, saveNamedBuilding, deleteNamedBuilding,
+  fetchNamedBuilding, fetchNamedBuildings, saveNamedBuilding, deleteNamedBuilding,
   type NamedBuilding,
 } from "@/lib/api";
 import { narimanovMonitoringStyle } from "@/lib/mapStyle";
@@ -163,6 +163,9 @@ export default function MapPage() {
   const [buildingSaving, setBuildingSaving] = useState(false);
   const [buildingSaveError, setBuildingSaveError] = useState<string | null>(null);
 
+  // Named buildings (for search integration)
+  const [namedBuildings, setNamedBuildings] = useState<NamedBuilding[]>([]);
+
   // Search state
   const [query,        setQuery]        = useState("");
   const [searchRes,    setSearchRes]    = useState<SearchResult[]>([]);
@@ -178,6 +181,7 @@ export default function MapPage() {
       .finally(() => setLoading(false));
 
     fetchComplaints(undefined, 200).then(setComplaints).catch(() => {});
+    fetchNamedBuildings().then(setNamedBuildings).catch(() => {});
 
     Promise.allSettled([
       fetchAirQuality(undefined, 50), fetchTraffic(undefined, 50),
@@ -311,6 +315,8 @@ export default function MapPage() {
         lng: buildingPanel.lng,
       });
       setBuildingPanel((prev) => prev ? { ...prev, saved: result } : prev);
+      // Refresh named buildings list so search picks up the new name
+      fetchNamedBuildings().then(setNamedBuildings).catch(() => {});
     } catch {
       setBuildingSaveError("Saxlama uğursuz oldu. Backend işləyirmi?");
     } finally {
@@ -349,7 +355,7 @@ export default function MapPage() {
     });
   }, []);
 
-  // ── Search (Nominatim / OpenStreetMap — no key, globally accessible) ────────
+  // ── Search (named buildings first, then Nominatim) ───────────────────────
   const handleSearch = useCallback((value: string) => {
     setQuery(value);
     if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
@@ -357,43 +363,63 @@ export default function MapPage() {
       setSearchRes([]); setShowDropdown(false); setNoResults(false); return;
     }
     searchTimerRef.current = setTimeout(async () => {
+      const q = value.toLowerCase().trim();
+
+      // 1. Match saved named buildings (instant, local)
+      const namedMatches: SearchResult[] = namedBuildings
+        .filter((nb) => nb.name.toLowerCase().includes(q) && nb.lat != null && nb.lng != null)
+        .map((nb) => ({
+          id: `named_${nb.id}`,
+          name: nb.name,
+          address: "Saxlanılmış bina",
+          lon: nb.lng!,
+          lat: nb.lat!,
+        }));
+
+      // 2. Nominatim results for the district bounding box
+      let nominatimResults: SearchResult[] = [];
       try {
-        // Nərimanov district bounding box: left,top,right,bottom
-        const viewbox = "49.82,40.45,49.92,40.38";
         const url = new URL("https://nominatim.openstreetmap.org/search");
         url.searchParams.set("q", value);
         url.searchParams.set("format", "json");
         url.searchParams.set("limit", "20");
-        url.searchParams.set("viewbox", viewbox);
+        url.searchParams.set("viewbox", "49.82,40.45,49.92,40.38");
         url.searchParams.set("bounded", "1");
         url.searchParams.set("accept-language", "az,en");
         const res = await fetch(url.toString(), {
           headers: { "User-Agent": "CityFix/1.0 (narimanov.az)" },
         });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const items: any[] = await res.json();
-        const filtered: SearchResult[] = items
-          .filter((i) => i.lon && i.lat)
-          .slice(0, 8)
-          .map((i) => {
-            const parts = String(i.display_name).split(",");
-            return {
-              id: String(i.place_id),
-              name: parts[0].trim(),
-              address: parts.slice(1, 3).join(",").trim(),
-              lon: parseFloat(i.lon),
-              lat: parseFloat(i.lat),
-            };
-          });
-        setSearchRes(filtered);
-        setNoResults(filtered.length === 0);
-        setShowDropdown(true);
+        if (res.ok) {
+          const items: any[] = await res.json();
+          nominatimResults = items
+            .filter((i) => i.lon && i.lat)
+            .slice(0, 8)
+            .map((i) => {
+              const parts = String(i.display_name).split(",");
+              return {
+                id: String(i.place_id),
+                name: parts[0].trim(),
+                address: parts.slice(1, 3).join(",").trim(),
+                lon: parseFloat(i.lon),
+                lat: parseFloat(i.lat),
+              };
+            });
+        }
       } catch (err) {
         console.warn("[Search]", err);
-        setSearchRes([]); setNoResults(true); setShowDropdown(true);
       }
+
+      // Named buildings first, then Nominatim, deduplicate by id, cap at 8
+      const merged = [
+        ...namedMatches,
+        ...nominatimResults.filter((r) => !namedMatches.find((n) => n.id === r.id)),
+      ].slice(0, 8);
+
+      setSearchRes(merged);
+      setNoResults(merged.length === 0);
+      setShowDropdown(true);
     }, 400);
-  }, []);
+  }, [namedBuildings]);
 
   const handleSearchSelect = useCallback((result: SearchResult) => {
     const map = mapInstanceRef.current;
@@ -762,8 +788,19 @@ export default function MapPage() {
                   onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(0,212,255,0.07)")}
                   onMouseLeave={(e) => (e.currentTarget.style.background = "none")}
                 >
-                  <div style={{ fontSize: 13, fontWeight: 500, color: "#e2e8f0" }}>{r.name}</div>
-                  {r.address && <div style={{ fontSize: 11, color: "rgba(226,232,240,0.4)", marginTop: 2 }}>{r.address}</div>}
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={{ fontSize: 13, fontWeight: 500, color: "#e2e8f0" }}>{r.name}</span>
+                    {r.id.startsWith("named_") && (
+                      <span style={{ fontSize: 10, fontWeight: 600, color: "#00d4ff",
+                        background: "rgba(0,212,255,0.12)", border: "1px solid rgba(0,212,255,0.3)",
+                        padding: "1px 6px", borderRadius: 4, flexShrink: 0 }}>
+                        Saxlanılmış
+                      </span>
+                    )}
+                  </div>
+                  {r.address && r.address !== "Saxlanılmış bina" && (
+                    <div style={{ fontSize: 11, color: "rgba(226,232,240,0.4)", marginTop: 2 }}>{r.address}</div>
+                  )}
                 </button>
               ))}
             </div>
