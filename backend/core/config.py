@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
     WATI_API_URL: str = ""    # e.g. https://live-server-12345.wati.io
     WATI_API_TOKEN: str = ""  # Bearer token from app.wati.io → Settings → API
+    TELEGRAM_BOT_TOKEN: str = ""  # from @BotFather on Telegram
 
 
 settings = Settings()

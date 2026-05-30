@@ -1,0 +1,24 @@
+{
+  "name": "cityfix",
+  "version": "1.0.0",
+  "description": "**Nərimanov rayonunun rəsmi rəqəmsal monitorinq və smart xidmət platforması.**  \r Official Digital Monitoring & Smart Services Platform for Nərimanov District, Baku, Azerbaijan.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ehmedlicelal/CityFix.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/ehmedlicelal/CityFix/issues"
+  },
+  "homepage": "https://github.com/ehmedlicelal/CityFix#readme"
+}

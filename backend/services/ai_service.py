@@ -13,6 +13,34 @@ _DEFAULT_CLASSIFICATION = {
 }
 
 
+async def is_complaint_message(text: str) -> bool:
+    """
+    Returns True if the text looks like a genuine citizen complaint/request.
+    Returns False for greetings, questions, test messages, spam, etc.
+    Defaults to True on AI failure so we never silently drop a real complaint.
+    """
+    prompt = (
+        "Aşağıdakı mesajın vətəndaş şikayəti, müraciəti və ya icra hakimiyyətinə "
+        "ünvanlanan real bir problem olub-olmadığını müəyyən et.\n\n"
+        f"Mesaj: {text}\n\n"
+        'YALNIZ JSON cavab ver: {"is_complaint": true} və ya {"is_complaint": false}\n'
+        "Salam, test, sual, mənasız mətn → false\n"
+        "İnfrastruktur, yol, su, işıq, təmizlik, təhlükəsizlik problemi → true"
+    )
+    response = await openrouter_chat([{"role": "user", "content": prompt}])
+    if response is None:
+        return True  # fail open — don't drop real complaints
+    try:
+        content = response["choices"][0]["message"]["content"].strip()
+        if content.startswith("```"):
+            content = content.split("```")[1]
+            if content.startswith("json"):
+                content = content[4:]
+        return json.loads(content).get("is_complaint", True)
+    except Exception:
+        return True
+
+
 async def classify_complaint(title: str, description: str) -> dict:
     """
     Calls OpenRouter to classify a complaint.
@@ -294,3 +322,64 @@ Full citizen text:
         return response["choices"][0]["message"]["content"].strip()
     except (KeyError, IndexError):
         return "Hesabat hazırlanarkən xəta baş verdi."
+
+
+# ── Telegram conversational AI ────────────────────────────────────────────────
+
+_TELEGRAM_SYSTEM_PROMPT = """Sən Bakı şəhəri Nərimanov Rayon İcra Hakimiyyətinin rəsmi Telegram bot assistantısan.
+
+Vəzifən:
+- Vətəndaşların şikayət, ərizə və təkliflərini qəbul etmək
+- Onlara mehriban və peşəkar şəkildə kömək etmək
+- Lazım olduqda əlavə məlumat istəmək
+
+Qaydalar:
+- HƏMİŞƏ Azərbaycan dilində cavab ver
+- Məlumat kifayət qədər olduqda şikayəti rəsmiləşdir
+- Cavabın HƏMİŞƏ düzgün JSON formatında olmalıdır, başqa heç nə yazma
+
+JSON formatları:
+1. Söhbət — daha çox məlumat lazımdır:
+{"action":"chat","reply":"..."}
+
+2. Şikayət hazırdır — kifayət qədər məlumat var:
+{"action":"file","reply":"...","title":"...","description":"..."}
+
+Şikayəti "file" et yalnız problem aydın olduqda (nə, harada).
+Salam, test, ümumi sual kimi mesajlara "chat" ilə cavab ver."""
+
+
+async def telegram_ai_reply(
+    history: list[dict],
+    new_user_message: str,
+) -> dict:
+    """
+    Given conversation history + new user message, returns one of:
+      {"action": "chat",  "reply": "..."}
+      {"action": "file",  "reply": "...", "title": "...", "description": "..."}
+    Falls back to {"action": "chat", "reply": <fallback>} on any error.
+    """
+    messages = [{"role": "system", "content": _TELEGRAM_SYSTEM_PROMPT}]
+    messages.extend(history)
+    messages.append({"role": "user", "content": new_user_message})
+
+    response = await openrouter_chat(messages, temperature=0.4, max_tokens=512)
+
+    fallback = {"action": "chat", "reply": "Zəhmət olmasa probleminizi ətraflı izah edin."}
+
+    if response is None:
+        return fallback
+
+    try:
+        content = response["choices"][0]["message"]["content"].strip()
+        if content.startswith("```"):
+            content = content.split("```")[1]
+            if content.startswith("json"):
+                content = content[4:]
+        result = json.loads(content)
+        if result.get("action") not in ("chat", "file"):
+            return fallback
+        return result
+    except Exception as exc:
+        logger.warning("[TG-AI] Failed to parse AI reply: %s", exc)
+        return fallback
