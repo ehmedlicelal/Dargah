@@ -5,7 +5,7 @@ from .config import settings
 logger = logging.getLogger(__name__)
 
 
-async def openrouter_chat(messages: list[dict]) -> dict | None:
+async def openrouter_chat(messages: list[dict], model: str | None = None) -> dict | None:
     headers = {
         "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
         "Content-Type": "application/json",
@@ -13,10 +13,10 @@ async def openrouter_chat(messages: list[dict]) -> dict | None:
         "X-Title": "Narimanov Digital",
     }
     payload = {
-        "model": settings.OPENROUTER_MODEL,
+        "model": model or settings.OPENROUTER_MODEL,
         "messages": messages,
-        "temperature": 0.3,
-        "max_tokens": 500,
+        "temperature": 0.2,
+        "max_tokens": 1024,
     }
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:

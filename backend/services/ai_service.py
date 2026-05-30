@@ -1,6 +1,7 @@
 import json
 import logging
 from core.openrouter_client import openrouter_chat
+from core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -8,6 +9,7 @@ _DEFAULT_CLASSIFICATION = {
     "category": "other",
     "priority": "medium",
     "ai_summary": None,
+    "reasoning": None,
 }
 
 
@@ -49,6 +51,70 @@ Cavabı bu JSON formatında ver (başqa heç nə yazma):
         }
     except (KeyError, json.JSONDecodeError, IndexError) as exc:
         logger.warning("Failed to parse AI classification response: %s", exc)
+        return _DEFAULT_CLASSIFICATION.copy()
+
+
+async def analyze_complaint_with_image(
+    title: str,
+    description: str,
+    image_url: str | None = None,
+) -> dict:
+    """
+    Analyzes a complaint with optional image.
+    Returns category, priority, ai_summary, reasoning.
+    Uses a vision model when image_url is provided (base64 data URL or public URL).
+    """
+    text_block = f"Şikayət başlığı: {title}\nŞikayət məzmunu: {description}"
+    json_schema = (
+        '{\n'
+        '  "category": "<road|utilities|environment|safety|social|other>",\n'
+        '  "priority": "<low|medium|high|critical>",\n'
+        '  "ai_summary": "<50 sözdən az Azərbaycan dilində xülasə>",\n'
+        '  "reasoning": "<25 sözdən az — niyə bu prioritet seçildi>"\n'
+        '}'
+    )
+    instruction = (
+        "Aşağıdakı şikayəti analiz et"
+        + (" və şəkli nəzərə al." if image_url else ".")
+        + " YALNIZ JSON formatında cavab ver:\n\n"
+        + text_block
+        + "\n\nJSON:\n"
+        + json_schema
+    )
+
+    if image_url:
+        messages = [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": instruction},
+                {"type": "image_url", "image_url": {"url": image_url}},
+            ],
+        }]
+        model = settings.OPENROUTER_VISION_MODEL
+    else:
+        messages = [{"role": "user", "content": instruction}]
+        model = None
+
+    response = await openrouter_chat(messages, model=model)
+
+    if response is None:
+        return _DEFAULT_CLASSIFICATION.copy()
+
+    try:
+        content = response["choices"][0]["message"]["content"].strip()
+        if content.startswith("```"):
+            content = content.split("```")[1]
+            if content.startswith("json"):
+                content = content[4:]
+        result = json.loads(content)
+        return {
+            "category": result.get("category", "other"),
+            "priority": result.get("priority", "medium"),
+            "ai_summary": result.get("ai_summary"),
+            "reasoning": result.get("reasoning"),
+        }
+    except (KeyError, json.JSONDecodeError, IndexError) as exc:
+        logger.warning("Failed to parse AI analysis response: %s", exc)
         return _DEFAULT_CLASSIFICATION.copy()
 
 

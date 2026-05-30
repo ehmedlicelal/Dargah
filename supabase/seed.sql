@@ -133,7 +133,8 @@ INSERT INTO public.services (id, name, name_az, description_az, category, contac
         '+994 12 441-XX-X4',
         'sosial@narimanov.gov.az',
         'B.e–C.a: 09:00–17:00'
-    );
+    )
+ON CONFLICT (id) DO NOTHING;
 
 -- ============================================================
 -- OPEN DATA REPORTS
@@ -170,11 +171,68 @@ INSERT INTO public.open_data_reports (id, title, title_az, type, data, published
             "avg_resolution_hours": 36
         }',
         now() - interval '3 days'
-    );
+    )
+ON CONFLICT (id) DO NOTHING;
 
 -- ============================================================
--- NOTE: Complaint seed data is omitted because complaints
--- reference users.id which requires auth.users entries.
--- Create test users via Supabase Auth dashboard first,
--- then insert complaints using those user IDs.
+-- COMPLAINTS — user_id is nullable so these can be inserted without auth users
+-- Coordinates are within Nərimanov district boundary
 -- ============================================================
+INSERT INTO public.complaints (zone_id, title, description, category, priority, status, lat, lng) VALUES
+    (
+        '11111111-0000-0000-0000-000000000001',
+        'Su borusu partlayıb',
+        'Heydər Əliyev prospekti 42 ünvanında su borusu partlayıb, yol su altındadır',
+        'utilities', 'critical', 'open',
+        40.4116, 49.8678
+    ),
+    (
+        '11111111-0000-0000-0000-000000000002',
+        'Elektrik kəsilməsi',
+        'Koroğlu metro stansiyası yaxınlığında 3 saatdır işıq yoxdur',
+        'utilities', 'high', 'in_progress',
+        40.4316, 49.8784
+    ),
+    (
+        '11111111-0000-0000-0000-000000000003',
+        'Yol çuxuru',
+        'Qara Qarayev metro girişinin yanında böyük çuxur yaranıb, avtomobillər zərər görür',
+        'road', 'high', 'open',
+        40.4091, 49.9053
+    ),
+    (
+        '11111111-0000-0000-0000-000000000002',
+        'Zibil qutular dolub',
+        'Gənclik prospektindəki zibil qutular bir həftədir boşaldılmayıb',
+        'environment', 'medium', 'open',
+        40.4252, 49.8778
+    ),
+    (
+        '11111111-0000-0000-0000-000000000004',
+        'Küçə işığı işləmir',
+        '8 Noyabr prospektinin 200 metr uzunluğunda küçə işıqları söndürülüb',
+        'road', 'medium', 'in_progress',
+        40.4025, 49.8630
+    ),
+    (
+        '11111111-0000-0000-0000-000000000005',
+        'Səkilər sınıb',
+        'Lermontov küçəsindəki səkilər köhnəlib, yaşlılar üçün təhlükəlidir',
+        'road', 'low', 'open',
+        40.4188, 49.8510
+    ),
+    (
+        '11111111-0000-0000-0000-000000000001',
+        'Qaz iyi gəlir',
+        'Vüsal küçəsi 15 sakinlər qaz iyindən şikayətlənir',
+        'utilities', 'critical', 'open',
+        40.4362, 49.8655
+    ),
+    (
+        '11111111-0000-0000-0000-000000000003',
+        'Ağaclar budanmır',
+        'Ramana yolunun kənarındakı ağaclar artıq böyüyüb, görünüşü bağlayır',
+        'environment', 'low', 'resolved',
+        40.3985, 49.8920
+    )
+ON CONFLICT DO NOTHING;

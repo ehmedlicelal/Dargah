@@ -7,6 +7,13 @@ import type {
   OpenDataReport,
 } from "./types";
 
+export interface AiAnalysis {
+  category: string;
+  priority: "low" | "medium" | "high" | "critical";
+  ai_summary: string | null;
+  reasoning: string | null;
+}
+
 const BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
 
 async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
@@ -92,4 +99,43 @@ export function fetchOpenDataReports(): Promise<OpenDataReport[]> {
 
 export function fetchAiSummary(): Promise<{ summary: string; data_points: number }> {
   return apiFetch("/open-data/summary");
+}
+
+export function analyzeComplaint(
+  title: string,
+  description: string,
+  image_url?: string,
+): Promise<AiAnalysis> {
+  return apiFetch("/ai/analyze", {
+    method: "POST",
+    body: JSON.stringify({ title, description, image_url }),
+  });
+}
+
+// ── Named buildings ─────────────────────────────────────────────────────────
+export interface NamedBuilding {
+  id: string;
+  feature_id: string;
+  name: string;
+  lat?: number;
+  lng?: number;
+  created_at?: string;
+}
+
+export function fetchNamedBuildings(): Promise<NamedBuilding[]> {
+  return apiFetch("/buildings/named");
+}
+
+export function fetchNamedBuilding(featureId: string): Promise<NamedBuilding | null> {
+  return apiFetch(`/buildings/named/${encodeURIComponent(featureId)}`);
+}
+
+export function saveNamedBuilding(data: {
+  feature_id: string; name: string; lat?: number; lng?: number;
+}): Promise<NamedBuilding> {
+  return apiFetch("/buildings/named", { method: "POST", body: JSON.stringify(data) });
+}
+
+export function deleteNamedBuilding(featureId: string): Promise<void> {
+  return apiFetch(`/buildings/named/${encodeURIComponent(featureId)}`, { method: "DELETE" });
 }

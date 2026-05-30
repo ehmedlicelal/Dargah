@@ -258,3 +258,35 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 CREATE TRIGGER on_auth_user_created
     AFTER INSERT ON auth.users
     FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+
+-- ============================================================
+-- NAMED BUILDINGS
+-- ============================================================
+CREATE TABLE IF NOT EXISTS public.named_buildings (
+    id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    feature_id  TEXT NOT NULL UNIQUE,   -- stable Mapbox/OSM feature id
+    name        TEXT NOT NULL,
+    lat         DOUBLE PRECISION,
+    lng         DOUBLE PRECISION,
+    created_at  TIMESTAMPTZ DEFAULT now(),
+    updated_at  TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS named_buildings_feature_id_idx ON public.named_buildings (feature_id);
+
+ALTER TABLE public.named_buildings ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Named buildings readable by all"
+    ON public.named_buildings FOR SELECT USING (true);
+
+CREATE POLICY "Authenticated users can save buildings"
+    ON public.named_buildings FOR INSERT
+    WITH CHECK (auth.role() = 'authenticated');
+
+CREATE POLICY "Authenticated users can update buildings"
+    ON public.named_buildings FOR UPDATE
+    USING (auth.role() = 'authenticated');
+
+CREATE POLICY "Authenticated users can delete buildings"
+    ON public.named_buildings FOR DELETE
+    USING (auth.role() = 'authenticated');
