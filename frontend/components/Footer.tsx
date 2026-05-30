@@ -1,10 +1,32 @@
-/* UI placeholder — replace with your design */
+import Link from "next/link";
+
 export default function Footer() {
   return (
-    <footer className="bg-gray-800 text-gray-300 py-6 mt-12">
-      <div className="max-w-7xl mx-auto px-4 text-center text-sm">
-        <p>© 2025 Nərimanov Rayon İcra Hakimiyyəti. Bütün hüquqlar qorunur.</p>
-        <p className="mt-1 text-gray-500">Nərimanov Digital v1.0</p>
+    <footer className="w-full bg-surface-container-low border-t border-outline-variant/20 mt-auto">
+      <div className="max-w-8xl mx-auto px-margin-mobile md:px-margin-desktop py-8 flex flex-col md:flex-row justify-between items-center gap-4">
+        <div className="text-label-md font-bold text-primary">
+          © 2025 Nərimanov Digital. Bütün hüquqlar qorunur.
+        </div>
+
+        <nav className="flex flex-wrap justify-center gap-6">
+          {[
+            { href: "#", label: "Məxfilik Siyasəti" },
+            { href: "#", label: "İstifadə Şərtləri" },
+            { href: "#", label: "Əlaqə" },
+          ].map(({ href, label }) => (
+            <Link
+              key={label}
+              href={href}
+              className="text-label-sm text-on-surface-variant hover:text-secondary transition-colors opacity-80 hover:opacity-100"
+            >
+              {label}
+            </Link>
+          ))}
+        </nav>
+
+        <div className="text-label-sm text-on-surface-variant opacity-80">
+          Nərimanov Rayon İcra Hakimiyyəti
+        </div>
       </div>
     </footer>
   );

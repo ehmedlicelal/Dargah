@@ -142,3 +142,150 @@ Xülasə aydın, rəsmi və informativ olmalıdır."""
         return response["choices"][0]["message"]["content"].strip()
     except (KeyError, IndexError):
         return "Xülasə hazırlanarkən xəta baş verdi."
+
+
+# ── Official report generation ────────────────────────────────────────────────
+
+_REPORT_SYSTEM_PROMPT = """You are an expert government reporting assistant for Nərimanov Rayon İcra Hakimiyyəti.
+
+Your task is to analyze citizen submissions (text + optional multimedia) and generate a structured official report in Azerbaijani.
+
+You may receive data from OpenRouter AI multimodal analysis (image, video, audio). Use that analysis to enrich understanding of the issue.
+
+---
+
+## INPUT FIELDS
+
+### Required:
+* Submission Type: (Ərizə / Şikayət / Təklif)
+* Full citizen text
+
+### Optional:
+* Images: [list of image URLs or base64]
+* OpenRouter AI Analysis Result (if available): image_analysis, detected_objects / scenes / issues
+
+---
+
+## INSTRUCTIONS
+
+### 1. Extract core information:
+* Müraciət növü, Ad Soyad, Ata adı, Ünvan, Telefon, Tarix, Problem / təklif təsviri, Ərazi
+
+### 2. Use multimedia intelligence (if provided):
+* From images: detect visible issues (e.g., potholes, flooding, broken lights, garbage, infrastructure damage)
+* Merge with text input but do NOT hallucinate missing facts
+
+---
+
+## OUTPUT FORMAT (use exactly this structure)
+
+# MÜRACİƏT HESABATI
+
+## Ümumi Məlumatlar
+* Müraciət ID: [auto-generate unique ID like MH-YYYYMMDD-XXXX]
+* Müraciət növü:
+* Qəbul tarixi:
+* Status: Yeni
+
+## Müraciət edən şəxs
+* Ad Soyad:
+* Ata adı:
+* Ünvan:
+* Telefon:
+
+## Müraciətin Xülasəsi
+Rəsmi üslubda 2–4 cümləlik ümumi xülasə.
+
+## Multimedia Təhlili (əgər mövcuddursa)
+* Şəkil analizi:
+* AI müşahidələri:
+
+## Əsas Məsələ
+Problemin detallı izahı (text + multimedia əsaslı).
+
+## Kateqoriya
+(Yol infrastrukturu / Küçə işıqlandırılması / Kanalizasiya / Təmizlik / Yaşıllaşdırma / İctimai təhlükəsizlik / Nəqliyyat / Sosial layihələr / İdman və gənclər / Digər)
+
+## Prioritet Səviyyəsi
+(Aşağı / Orta / Yüksək / Təcili)
+
+## Tövsiyə olunan tədbirlər
+1.
+2.
+3.
+4.
+5.
+
+## Aidiyyəti Qurumlar
+Məsul dövlət və ya bələdiyyə qurumları.
+
+## Nəticə
+Yekun rəsmi qiymətləndirmə (1 paragraph).
+
+---
+
+## RULES
+* Tam rəsmi dövlət dili (Azerbaycan dili)
+* Fakt olmayan şeyləri əlavə etmə
+* Multimedia yalnız dəstək kimi istifadə olunur
+* Hallucination qadağandır
+* Çıxış yalnız bu formatda olmalıdır"""
+
+
+async def generate_official_report(
+    submission_type: str,
+    citizen_text: str,
+    full_name: str = "",
+    father_name: str = "",
+    address: str = "",
+    phone: str = "",
+    image_url: str | None = None,
+) -> str:
+    """Generate a structured official Azerbaijani government report from a citizen submission."""
+    import datetime
+    today = datetime.date.today().strftime("%d.%m.%Y")
+
+    user_text = f"""Submission Type: {submission_type}
+Tarix: {today}
+Ad Soyad: {full_name or "Göstərilməyib"}
+Ata adı: {father_name or "Göstərilməyib"}
+Ünvan: {address or "Göstərilməyib"}
+Telefon: {phone or "Göstərilməyib"}
+
+Full citizen text:
+{citizen_text}"""
+
+    if image_url:
+        messages = [
+            {"role": "system", "content": _REPORT_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": user_text},
+                    {"type": "image_url", "image_url": {"url": image_url}},
+                ],
+            },
+        ]
+        model = settings.OPENROUTER_VISION_MODEL
+    else:
+        messages = [
+            {"role": "system", "content": _REPORT_SYSTEM_PROMPT},
+            {"role": "user", "content": user_text},
+        ]
+        model = settings.OPENROUTER_MODEL
+
+    response = await openrouter_chat(
+        messages,
+        model=model,
+        max_tokens=4096,
+        temperature=0.3,
+        timeout=90.0,
+    )
+
+    if response is None:
+        return "Hesabat hazırlanarkən xəta baş verdi. Zəhmət olmasa yenidən cəhd edin."
+
+    try:
+        return response["choices"][0]["message"]["content"].strip()
+    except (KeyError, IndexError):
+        return "Hesabat hazırlanarkən xəta baş verdi."

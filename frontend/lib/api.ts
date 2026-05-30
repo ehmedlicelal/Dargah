@@ -17,8 +17,12 @@ export interface AiAnalysis {
 const BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
 
 async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
+  const isWrite = options?.method && options.method !== "GET" && options.method !== "HEAD";
   const res = await fetch(`${BASE_URL}${path}`, {
-    headers: { "Content-Type": "application/json", ...options?.headers },
+    headers: {
+      ...(isWrite ? { "Content-Type": "application/json" } : {}),
+      ...options?.headers,
+    },
     ...options,
   });
   if (!res.ok) {
@@ -138,4 +142,22 @@ export function saveNamedBuilding(data: {
 
 export function deleteNamedBuilding(featureId: string): Promise<void> {
   return apiFetch(`/buildings/named/${encodeURIComponent(featureId)}`, { method: "DELETE" });
+}
+
+// ── Official report generation ──────────────────────────────────────────────
+export interface ReportRequest {
+  submission_type: string;
+  citizen_text: string;
+  full_name?: string;
+  father_name?: string;
+  address?: string;
+  phone?: string;
+  image_url?: string;
+}
+
+export function generateReport(data: ReportRequest): Promise<{ report: string }> {
+  return apiFetch("/reports/generate", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
 }

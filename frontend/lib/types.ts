@@ -106,10 +106,15 @@ export interface OpenDataReport {
 }
 
 export interface ComplaintCreate {
-  zone_id?: string;
-  title: string;
-  description: string;
-  priority?: "low" | "medium" | "high" | "critical";
-  lat?: number;
-  lng?: number;
+  zone_id?:        string;
+  title:           string;
+  description:     string;
+  priority?:       "low" | "medium" | "high" | "critical";
+  lat?:            number;
+  lng?:            number;
+  submission_type?: string;
+  citizen_name?:   string;
+  citizen_father?: string;
+  citizen_phone?:  string;
+  attachments?:    string[];
 }

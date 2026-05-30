@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
-import { analyzeComplaint, createComplaint, fetchComplaints, fetchZones } from "@/lib/api";
+import { analyzeComplaint, createComplaint, fetchComplaints, fetchZones, generateReport } from "@/lib/api";
 import type { AiAnalysis } from "@/lib/api";
 import type { Complaint, ComplaintCreate, DistrictZone } from "@/lib/types";
 import ComplaintCard from "@/components/ComplaintCard";
@@ -17,6 +17,31 @@ const NarimanovMap = dynamic(() => import("@/components/NarimanovMap"), {
     </div>
   ),
 });
+
+// ── Submission types ─────────────────────────────────────────────────────────
+const SUBMISSION_TYPES = ["Şikayət", "Ərizə", "Təklif"] as const;
+
+// ── Report markdown renderer ──────────────────────────────────────────────────
+function ReportRenderer({ text }: { text: string }) {
+  return (
+    <div className="space-y-1 text-sm leading-relaxed text-gray-800">
+      {text.split("\n").map((line, i) => {
+        if (line.startsWith("# "))
+          return <h1 key={i} className="text-lg font-bold text-gray-900 mt-3 mb-1 border-b pb-1">{line.slice(2)}</h1>;
+        if (line.startsWith("## "))
+          return <h2 key={i} className="text-sm font-bold text-brand mt-4 mb-0.5">{line.slice(3)}</h2>;
+        if (/^\d+\.\s/.test(line))
+          return <p key={i} className="ml-4 text-gray-700">{line}</p>;
+        if (line.startsWith("* "))
+          return <p key={i} className="flex gap-2 text-gray-700"><span className="text-brand flex-shrink-0 mt-0.5">•</span><span>{line.slice(2)}</span></p>;
+        if (line.startsWith("---"))
+          return <hr key={i} className="my-2 border-gray-200" />;
+        if (line.trim() === "") return <div key={i} className="h-1" />;
+        return <p key={i} className="text-gray-700">{line}</p>;
+      })}
+    </div>
+  );
+}
 
 const PRIORITY_OPTIONS = [
   { value: "low" as const,      label: "Aşağı",   deadline: "30 gün",   activeBg: "bg-green-50",  activeBorder: "border-green-500",  activeText: "text-green-700",  dot: "#22c55e" },
@@ -39,7 +64,14 @@ export default function ComplaintsPage() {
   const [submitting, setSubmitting] = useState(false);
   const [submitSuccess, setSubmitSuccess] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [form, setForm] = useState<ComplaintCreate>({ title: "", description: "" });
+  const [form, setForm] = useState<ComplaintCreate>({ title: "", description: "", submission_type: "Şikayət" });
+  // Citizen personal info (for official report)
+  const [citizenName,   setCitizenName]   = useState("");
+  const [citizenFather, setCitizenFather] = useState("");
+  const [citizenPhone,  setCitizenPhone]  = useState("");
+  // Report modal
+  const [reportModal,     setReportModal]     = useState<{ open: boolean; report: string; complaintTitle: string }>({ open: false, report: "", complaintTitle: "" });
+  const [reportLoading,   setReportLoading]   = useState<string | null>(null); // complaint id being processed
   const [selectedLocation, setSelectedLocation] = useState<{ lat: number; lng: number } | null>(null);
 
   // AI analysis state
@@ -214,9 +246,15 @@ export default function ComplaintsPage() {
 
     setSubmitting(true);
     try {
-      const created = await createComplaint(form);
+      const created = await createComplaint({
+        ...form,
+        citizen_name:   citizenName   || undefined,
+        citizen_father: citizenFather || undefined,
+        citizen_phone:  citizenPhone  || undefined,
+      });
       setComplaints((prev) => [created, ...prev]);
-      setForm({ title: "", description: "" });
+      setForm({ title: "", description: "", submission_type: "Şikayət" });
+      setCitizenName(""); setCitizenFather(""); setCitizenPhone("");
       setSelectedLocation(null);
       setImagePreview(null);
       setImageDataUrl(null);
@@ -227,6 +265,25 @@ export default function ComplaintsPage() {
       setSubmitError("Şikayət göndərilmədi. Yenidən cəhd edin.");
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  // ── Generate official report from a complaint ──────────────────
+  async function handleGenerateReport(c: Complaint) {
+    setReportLoading(c.id.toString());
+    try {
+      const result = await generateReport({
+        submission_type: (c as any).submission_type ?? "Şikayət",
+        citizen_text:    `${c.title}\n\n${c.description}`,
+        full_name:       (c as any).citizen_name   ?? "",
+        father_name:     (c as any).citizen_father ?? "",
+        phone:           (c as any).citizen_phone  ?? "",
+      });
+      setReportModal({ open: true, report: result.report, complaintTitle: c.title });
+    } catch {
+      alert("Hesabat hazırlanarkən xəta baş verdi.");
+    } finally {
+      setReportLoading(null);
     }
   }
 
@@ -250,6 +307,46 @@ export default function ComplaintsPage() {
             </div>
           ) : (
             <form onSubmit={handleSubmit} className="space-y-5 bg-white border border-gray-200 rounded-lg p-5 shadow-sm">
+
+              {/* Submission type */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Müraciət Növü *</label>
+                <div className="flex gap-2">
+                  {SUBMISSION_TYPES.map((t) => (
+                    <button key={t} type="button"
+                      onClick={() => setForm({ ...form, submission_type: t })}
+                      className={`flex-1 py-1.5 px-2 rounded-lg border-2 text-sm font-medium transition-all ${
+                        (form.submission_type ?? "Şikayət") === t
+                          ? "bg-brand text-white border-brand"
+                          : "bg-white text-gray-600 border-gray-200 hover:border-brand"
+                      }`}
+                    >{t}</button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Citizen personal info */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Vətəndaş Məlumatları
+                  <span className="text-gray-400 font-normal ml-1">(ixtiyari — rəsmi hesabat üçün)</span>
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  {[
+                    { label: "Ad Soyad",   val: citizenName,   set: setCitizenName,   ph: "Əli Əliyev" },
+                    { label: "Ata adı",    val: citizenFather, set: setCitizenFather, ph: "Həsən" },
+                    { label: "Telefon",    val: citizenPhone,  set: setCitizenPhone,  ph: "+994 50 XXX XX XX" },
+                  ].map(({ label, val, set, ph }) => (
+                    <div key={label} className={label === "Telefon" ? "col-span-2" : ""}>
+                      <label className="block text-xs text-gray-500 mb-1">{label}</label>
+                      <input type="text" value={val} onChange={(e) => set(e.target.value)}
+                        placeholder={ph}
+                        className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-brand bg-gray-50"
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
 
               {/* Title */}
               <div>
@@ -531,13 +628,101 @@ export default function ComplaintsPage() {
               <p className="text-gray-500 text-sm">Hələ ki şikayət yoxdur</p>
             ) : (
               <div className="space-y-3">
-                {complaints.map((c) => <ComplaintCard key={c.id} complaint={c} />)}
+                {complaints.map((c) => (
+                  <div key={c.id} className="group relative">
+                    <ComplaintCard complaint={c} />
+                    {/* Report button overlay */}
+                    <button
+                      onClick={() => handleGenerateReport(c)}
+                      disabled={reportLoading === c.id.toString()}
+                      className="absolute top-3 right-3 flex items-center gap-1.5 px-2.5 py-1 bg-white border border-gray-200 rounded-lg text-xs font-medium text-gray-600 hover:border-brand hover:text-brand shadow-sm opacity-0 group-hover:opacity-100 transition-all disabled:opacity-50"
+                    >
+                      {reportLoading === c.id.toString() ? (
+                        <svg className="animate-spin w-3 h-3" viewBox="0 0 24 24" fill="none">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+                        </svg>
+                      ) : (
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                          <polyline points="14 2 14 8 20 8"/>
+                        </svg>
+                      )}
+                      Rəsmi Hesabat
+                    </button>
+                  </div>
+                ))}
               </div>
             )}
           </div>
         </div>
-
       </div>
+
+      {/* ── Report Modal ────────────────────────────────────────── */}
+      {reportModal.open && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 p-4 overflow-y-auto">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl my-8">
+            {/* Modal header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+              <div>
+                <h2 className="font-semibold text-gray-900">Rəsmi Müraciət Hesabatı</h2>
+                <p className="text-xs text-gray-400 mt-0.5 truncate max-w-sm">{reportModal.complaintTitle}</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => navigator.clipboard.writeText(reportModal.report).catch(() => {})}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50"
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <rect x="9" y="9" width="13" height="13" rx="2"/>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                  </svg>
+                  Kopyala
+                </button>
+                <button
+                  onClick={() => window.print()}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-white bg-brand rounded-lg hover:bg-brand-dark"
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <polyline points="6 9 6 2 18 2 18 9"/>
+                    <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/>
+                    <rect x="6" y="14" width="12" height="8"/>
+                  </svg>
+                  Çap Et
+                </button>
+                <button
+                  onClick={() => setReportModal({ open: false, report: "", complaintTitle: "" })}
+                  className="p-1.5 text-gray-400 hover:text-gray-700 rounded-lg hover:bg-gray-100"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            {/* Official letterhead */}
+            <div className="px-6 pt-4 pb-2 border-b border-gray-100 text-center">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-widest">Azərbaycan Respublikası</p>
+              <p className="text-sm font-bold text-gray-800">Bakı şəhəri Nərimanov Rayon İcra Hakimiyyəti</p>
+              <p className="text-xs text-gray-400">Rəsmi Müraciət Hesabatı</p>
+            </div>
+
+            {/* Report body */}
+            <div className="px-6 py-5 max-h-[60vh] overflow-y-auto">
+              <ReportRenderer text={reportModal.report} />
+            </div>
+
+            {/* Footer */}
+            <div className="px-6 py-3 border-t border-gray-100 bg-gray-50 rounded-b-xl">
+              <p className="text-xs text-gray-400 text-center">
+                Bu sənəd AI Hesabat Sistemi tərəfindən avtomatik yaradılmışdır.
+                Rəsmi qüvvəyə minməsi üçün səlahiyyətli şəxsin imzası tələb olunur.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

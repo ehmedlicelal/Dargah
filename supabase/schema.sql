@@ -255,6 +255,16 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
+-- ============================================================
+-- COMPLAINTS — extended citizen info + report storage
+-- Run these ALTER statements if the table already exists
+-- ============================================================
+ALTER TABLE public.complaints ADD COLUMN IF NOT EXISTS submission_type TEXT DEFAULT 'Şikayət';
+ALTER TABLE public.complaints ADD COLUMN IF NOT EXISTS citizen_name   TEXT;
+ALTER TABLE public.complaints ADD COLUMN IF NOT EXISTS citizen_father TEXT;
+ALTER TABLE public.complaints ADD COLUMN IF NOT EXISTS citizen_phone  TEXT;
+ALTER TABLE public.complaints ADD COLUMN IF NOT EXISTS report_content TEXT;
+
 CREATE TRIGGER on_auth_user_created
     AFTER INSERT ON auth.users
     FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();

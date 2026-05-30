@@ -12,6 +12,7 @@ import {
 import { narimanovMonitoringStyle } from "@/lib/mapStyle";
 import type { Complaint, DistrictZone, MonitoringData } from "@/lib/types";
 import type { MonitoringPoint } from "@/components/NarimanovMap";
+import RoleGuard from "@/components/RoleGuard";
 
 // ── Config ─────────────────────────────────────────────────────────────────
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? "";
@@ -128,7 +129,7 @@ const MONITORING_LEGEND = [
 ] as const;
 
 // ══════════════════════════════════════════════════════════════════════════════
-export default function MapPage() {
+function MapPageContent() {
   // Map instance (received via onMapReady callback)
   const mapInstanceRef = useRef<mapboxgl.Map | null>(null);
   const searchMarkerRef = useRef<mapboxgl.Marker | null>(null);
@@ -512,7 +513,7 @@ export default function MapPage() {
   return (
     <div style={{
       position: "fixed",
-      top: (isFullscreen || navCollapsed) ? 0 : 48,
+      top: (isFullscreen || navCollapsed) ? 0 : 64,
       left: 0, right: 0, bottom: 0,
       overflow: "hidden",
       background: "#06090f",
@@ -1057,11 +1058,20 @@ export default function MapPage() {
         select option { background: #0a0f20; }
         @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
 
-        /* Hide the footer and prevent body scroll on the map page */
+        /* Hide footer, prevent scroll, hide mobile nav strip on map page */
         body { overflow: hidden !important; }
         footer { display: none !important; }
         main { overflow: hidden !important; padding: 0 !important; margin: 0 !important; }
+        header > div:last-child { display: none !important; }
       `}</style>
     </div>
+  );
+}
+
+export default function MapPage() {
+  return (
+    <RoleGuard roles={["admin", "operator"]}>
+      <MapPageContent />
+    </RoleGuard>
   );
 }

@@ -13,6 +13,10 @@ class ComplaintCreate(BaseModel):
     priority: PriorityLevel | None = None
     lat: float | None = None
     lng: float | None = None
+    submission_type: str | None = "Şikayət"
+    citizen_name:   str | None = None
+    citizen_father: str | None = None
+    citizen_phone:  str | None = None
 
     @field_validator("title", "description")
     @classmethod
@@ -35,6 +39,11 @@ class ComplaintRead(BaseModel):
     attachments: list[str] | None = None
     lat: float | None = None
     lng: float | None = None
+    submission_type: str | None = None
+    citizen_name:   str | None = None
+    citizen_father: str | None = None
+    citizen_phone:  str | None = None
+    report_content: str | None = None
     created_at: datetime
     updated_at: datetime
 
