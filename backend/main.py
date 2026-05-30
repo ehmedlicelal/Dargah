@@ -7,7 +7,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
 from core.config import settings
-from routers import monitoring, complaints, auth, district_map, open_data, ai, buildings, reports
+from routers import monitoring, complaints, auth, district_map, open_data, ai, buildings, reports, webhook
 
 logging.basicConfig(
     level=logging.INFO,
@@ -44,6 +44,7 @@ app.include_router(open_data.router)
 app.include_router(ai.router)
 app.include_router(buildings.router)
 app.include_router(reports.router)
+app.include_router(webhook.router)
 
 
 @app.get("/health", tags=["Health"])

@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     OPENROUTER_VISION_MODEL: str = "google/gemini-2.0-flash-001"
     FRONTEND_URL: str = "http://localhost:3000"
     ENVIRONMENT: str = "development"
+    WATI_API_URL: str = ""    # e.g. https://live-server-12345.wati.io
+    WATI_API_TOKEN: str = ""  # Bearer token from app.wati.io → Settings → API
 
 
 settings = Settings()
