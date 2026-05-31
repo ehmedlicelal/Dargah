@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import {
   analyzeComplaint, fetchComplaints, fetchServices, fetchZones,
-  generateReport, updateComplaint, createComplaint, type ReportRequest,
+  generateReport, updateComplaint, createComplaint, suggestService,
+  type ReportRequest, type ServiceSuggestion,
 } from "@/lib/api";
 import type { AiAnalysis } from "@/lib/api";
 import type { Complaint, ComplaintCreate, DistrictZone, Service } from "@/lib/types";
@@ -14,11 +15,28 @@ import RoleGuard from "@/components/RoleGuard";
 const SUBMISSION_TYPES = ["Şikayət", "Ərizə", "Təklif"] as const;
 
 const PRIORITY_OPTS = [
-  { value: "low" as const,      label: "Aşağı",  deadline: "30 gün",  color: "#22c55e" },
-  { value: "medium" as const,   label: "Orta",   deadline: "14 gün",  color: "#3b82f6" },
-  { value: "high" as const,     label: "Yüksək", deadline: "7 gün",   color: "#f97316" },
-  { value: "critical" as const, label: "Kritik", deadline: "48 saat", color: "#ef4444" },
+  { value: "low" as const,      label: "Aşağı",  deadline: "30 gün",  color: "#22c55e", days: 30 },
+  { value: "medium" as const,   label: "Orta",   deadline: "14 gün",  color: "#3b82f6", days: 14 },
+  { value: "high" as const,     label: "Yüksək", deadline: "7 gün",   color: "#f97316", days: 7  },
+  { value: "critical" as const, label: "Kritik", deadline: "48 saat", color: "#ef4444", days: 2  },
 ] as const;
+
+function deadlineFromPriority(priority: string): string {
+  const opt = PRIORITY_OPTS.find(p => p.value === priority);
+  const days = opt?.days ?? 14;
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 16); // yyyy-MM-ddTHH:mm for datetime-local input
+}
+
+function deadlineStatus(deadline: string | null): "overdue" | "near" | "ok" | "none" {
+  if (!deadline) return "none";
+  const dl = new Date(deadline).getTime();
+  const now = Date.now();
+  if (dl < now) return "overdue";
+  if (dl - now < 48 * 60 * 60 * 1000) return "near";
+  return "ok";
+}
 
 const STATUS_OPTS = ["open", "in_progress", "resolved", "closed"] as const;
 const STATUS_LABELS: Record<string, string> = {
@@ -105,7 +123,9 @@ function DashboardContent() {
   const [editingPriority, setEditingPriority] = useState<Record<string, string>>({});
   const [editingCategory, setEditingCategory] = useState<Record<string, string>>({});
   const [directedService, setDirectedService] = useState<Record<string, string>>({});
+  const [editingDeadline, setEditingDeadline] = useState<Record<string, string>>({});
   const [savingExtra, setSavingExtra] = useState<string | null>(null);
+  const [svcSuggestion, setSvcSuggestion] = useState<Record<string, ServiceSuggestion & { loading?: boolean }>>({});
 
   // Submit form state
   const [form, setForm]           = useState<ComplaintCreate>({ title: "", description: "", submission_type: "Şikayət" });
@@ -229,13 +249,16 @@ function DashboardContent() {
   async function handleSaveExtras(c: Complaint) {
     setSavingExtra(c.id.toString());
     try {
-      const patch: Record<string, string> = {};
+      const patch: Record<string, string | null> = {};
       if (editingPriority[c.id]) patch.priority = editingPriority[c.id];
       if (editingCategory[c.id]) patch.category = editingCategory[c.id];
+      if (editingDeadline[c.id] !== undefined) {
+        patch.deadline = editingDeadline[c.id] ? new Date(editingDeadline[c.id]).toISOString() : null;
+      }
 
-      // Store directed service in report_content
       const svcId = directedService[c.id];
-      if (svcId) {
+      if (svcId !== undefined) {
+        patch.assigned_service_id = svcId || null;
         const svc = services.find(s => s.id === svcId);
         patch.report_content = JSON.stringify({
           directed_service_id: svcId,
@@ -249,6 +272,20 @@ function DashboardContent() {
       }
     } catch { alert("Yeniləmə uğursuz oldu."); }
     finally { setSavingExtra(null); }
+  }
+
+  async function handleSuggestService(c: Complaint) {
+    setSvcSuggestion(prev => ({ ...prev, [c.id]: { suggested_ids: [], reasoning: "", loading: true } }));
+    try {
+      const result = await suggestService(c.title, c.description, c.category);
+      setSvcSuggestion(prev => ({ ...prev, [c.id]: { ...result, loading: false } }));
+      // Auto-select the first suggestion if none chosen yet
+      if (result.suggested_ids[0] && !directedService[c.id]) {
+        setDirectedService(prev => ({ ...prev, [c.id]: result.suggested_ids[0] }));
+      }
+    } catch {
+      setSvcSuggestion(prev => ({ ...prev, [c.id]: { suggested_ids: [], reasoning: "AI xidmət tövsiyəsi alına bilmədi.", loading: false } }));
+    }
   }
 
   async function handleGenerateReport(c: Complaint) {
@@ -313,6 +350,10 @@ function DashboardContent() {
   }
 
   function getDirectedServiceName(c: Complaint): string | null {
+    if (c.assigned_service_id) {
+      const svc = services.find(s => s.id === c.assigned_service_id);
+      if (svc) return svc.name_az ?? svc.name;
+    }
     try {
       const rc = (c as any).report_content;
       if (rc) {
@@ -375,6 +416,35 @@ function DashboardContent() {
           ))}
         </div>
 
+        {/* Deadline notification banner */}
+        {(() => {
+          const overdue = complaints.filter(c => c.status !== "resolved" && c.status !== "closed" && deadlineStatus(c.deadline) === "overdue");
+          const near    = complaints.filter(c => c.status !== "resolved" && c.status !== "closed" && deadlineStatus(c.deadline) === "near");
+          if (overdue.length === 0 && near.length === 0) return null;
+          return (
+            <div className="flex flex-col gap-2 mb-md">
+              {overdue.length > 0 && (
+                <div className="flex items-start gap-3 bg-red-50 border border-red-300 rounded-lg px-md py-sm">
+                  <span className="material-symbols-outlined text-[20px] text-red-600 mt-0.5 shrink-0 filled">alarm_off</span>
+                  <div>
+                    <p className="text-label-md font-semibold text-red-700">Müddəti keçmiş şikayətlər — {overdue.length} ədəd</p>
+                    <p className="text-label-sm text-red-600 mt-0.5">{overdue.map(c => c.title).join(" · ")}</p>
+                  </div>
+                </div>
+              )}
+              {near.length > 0 && (
+                <div className="flex items-start gap-3 bg-orange-50 border border-orange-300 rounded-lg px-md py-sm">
+                  <span className="material-symbols-outlined text-[20px] text-orange-600 mt-0.5 shrink-0 filled">alarm</span>
+                  <div>
+                    <p className="text-label-md font-semibold text-orange-700">Son müddəti yaxınlaşan şikayətlər — {near.length} ədəd</p>
+                    <p className="text-label-sm text-orange-600 mt-0.5">{near.map(c => c.title).join(" · ")}</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
         {/* Tabs */}
         <div className="flex gap-1 border-b border-outline-variant/30 mb-md">
           {TABS.map(({ key, label, icon }) => (
@@ -424,9 +494,19 @@ function DashboardContent() {
                   const isExpanded = expandedId === c.id.toString();
                   const matchedServices = getMatchingServices(c);
                   const directedName = getDirectedServiceName(c);
+                  const dlStatus = deadlineStatus(c.deadline);
+
+                  const isResolved = c.status === "resolved" || c.status === "closed";
+                  const cardClass = dlStatus === "overdue" && !isResolved
+                    ? "bg-red-50 border-2 border-red-400 rounded-lg overflow-hidden shadow-sm"
+                    : dlStatus === "near" && !isResolved
+                    ? "bg-orange-50 border-2 border-orange-300 rounded-lg overflow-hidden hover:shadow-sm transition-shadow"
+                    : isResolved
+                    ? "bg-green-50 border border-green-300 rounded-lg overflow-hidden hover:shadow-sm transition-shadow"
+                    : "bg-surface-container-lowest border border-primary-container/10 rounded-lg overflow-hidden hover:shadow-sm transition-shadow";
 
                   return (
-                    <div key={c.id} className="bg-surface-container-lowest border border-primary-container/10 rounded-lg overflow-hidden hover:shadow-sm transition-shadow">
+                    <div key={c.id} className={cardClass}>
                       {/* Card header row */}
                       <div className="p-md">
                         <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -463,9 +543,25 @@ function DashboardContent() {
                                 {(c as any).citizen_phone && ` · ${(c as any).citizen_phone}`}
                               </p>
                             )}
-                            <p className="text-label-sm text-outline mt-2">
-                              {new Date(c.created_at).toLocaleDateString("az-AZ", { day: "2-digit", month: "long", year: "numeric" })}
-                            </p>
+                            <div className="flex items-center gap-3 mt-2 flex-wrap">
+                              <p className="text-label-sm text-outline">
+                                {new Date(c.created_at).toLocaleDateString("az-AZ", { day: "2-digit", month: "long", year: "numeric" })}
+                              </p>
+                              {c.deadline && (
+                                <p className={`text-label-sm flex items-center gap-1 font-medium ${
+                                  dlStatus === "overdue" ? "text-red-600" :
+                                  dlStatus === "near"    ? "text-orange-600" :
+                                  "text-on-surface-variant"
+                                }`}>
+                                  <span className="material-symbols-outlined text-[13px]">
+                                    {dlStatus === "overdue" ? "alarm_off" : "alarm"}
+                                  </span>
+                                  Son müddət: {new Date(c.deadline).toLocaleDateString("az-AZ", { day: "2-digit", month: "long", year: "numeric" })}
+                                  {dlStatus === "overdue" && " — Keçib!"}
+                                  {dlStatus === "near"    && " — Yaxınlaşır!"}
+                                </p>
+                              )}
+                            </div>
                           </div>
 
                           <div className="flex items-center gap-2 shrink-0 flex-wrap">
@@ -492,7 +588,13 @@ function DashboardContent() {
                             </button>
 
                             <button
-                              onClick={() => setExpandedId(isExpanded ? null : c.id.toString())}
+                              onClick={() => {
+                                const next = isExpanded ? null : c.id.toString();
+                                setExpandedId(next);
+                                if (next && !c.deadline && editingDeadline[c.id] === undefined) {
+                                  setEditingDeadline(prev => ({ ...prev, [c.id]: deadlineFromPriority(c.priority) }));
+                                }
+                              }}
                               className="flex items-center gap-1 text-label-sm border border-primary-container/20 text-on-surface-variant px-3 py-1 rounded hover:border-secondary hover:text-secondary transition-colors"
                             >
                               <span className="material-symbols-outlined text-[16px]">
@@ -531,7 +633,17 @@ function DashboardContent() {
                               <label className="block text-label-sm text-on-surface-variant mb-1">Kritiklik Səviyyəsi</label>
                               <select
                                 value={editingPriority[c.id] ?? c.priority}
-                                onChange={e => setEditingPriority(prev => ({ ...prev, [c.id]: e.target.value }))}
+                                onChange={e => {
+                                  const p = e.target.value;
+                                  const oldPriority = editingPriority[c.id] ?? c.priority;
+                                  setEditingPriority(prev => ({ ...prev, [c.id]: p }));
+                                  // Update auto-deadline if it still matches the old priority's default (not manually changed)
+                                  const oldAuto = deadlineFromPriority(oldPriority);
+                                  const current = editingDeadline[c.id] ?? (c.deadline ? new Date(c.deadline).toISOString().slice(0, 16) : "");
+                                  if (!current || current === oldAuto) {
+                                    setEditingDeadline(prev => ({ ...prev, [c.id]: deadlineFromPriority(p) }));
+                                  }
+                                }}
                                 className="w-full text-label-sm border border-primary-container/20 rounded px-2 py-1.5 bg-surface-container-lowest text-on-surface focus:outline-none focus:border-secondary"
                               >
                                 {PRIORITY_OPTS.map(p => (
@@ -554,38 +666,103 @@ function DashboardContent() {
                             </div>
                           </div>
 
+                          {/* Deadline */}
+                          <div>
+                            <label className="block text-label-sm text-on-surface-variant mb-1 flex items-center gap-1">
+                              <span className="material-symbols-outlined text-[14px]">alarm</span>
+                              Son İcra Tarixi (Deadline)
+                            </label>
+                            <div className="flex gap-2 items-center">
+                              <input
+                                type="datetime-local"
+                                value={
+                                  editingDeadline[c.id] !== undefined
+                                    ? editingDeadline[c.id]
+                                    : c.deadline ? new Date(c.deadline).toISOString().slice(0, 16) : ""
+                                }
+                                onChange={e => setEditingDeadline(prev => ({ ...prev, [c.id]: e.target.value }))}
+                                className={`flex-1 text-label-sm border rounded px-2 py-1.5 bg-surface-container-lowest text-on-surface focus:outline-none focus:border-secondary ${
+                                  dlStatus === "overdue" ? "border-red-400" :
+                                  dlStatus === "near"    ? "border-orange-400" :
+                                  "border-primary-container/20"
+                                }`}
+                              />
+                              <button
+                                type="button"
+                                onClick={() => setEditingDeadline(prev => ({ ...prev, [c.id]: deadlineFromPriority(editingPriority[c.id] ?? c.priority) }))}
+                                className="text-label-sm text-secondary border border-secondary/30 rounded px-2 py-1.5 hover:bg-secondary-container/20 transition-colors whitespace-nowrap"
+                              >
+                                Prioritetdən al
+                              </button>
+                            </div>
+                            {dlStatus === "overdue" && (
+                              <p className="text-label-sm text-red-600 mt-1 flex items-center gap-1">
+                                <span className="material-symbols-outlined text-[13px]">alarm_off</span>
+                                Bu şikayətin müddəti keçib!
+                              </p>
+                            )}
+                            {dlStatus === "near" && (
+                              <p className="text-label-sm text-orange-600 mt-1 flex items-center gap-1">
+                                <span className="material-symbols-outlined text-[13px]">alarm</span>
+                                Son müddətə 48 saatdan az qalıb!
+                              </p>
+                            )}
+                          </div>
+
                           {/* Direct to service */}
                           <div>
-                            <p className="text-label-sm font-semibold text-on-surface mb-2 flex items-center gap-1">
-                              <span className="material-symbols-outlined text-[16px]">send</span>
-                              Xidmətə Yönləndir
-                            </p>
-                            {matchedServices.length === 0 ? (
-                              <p className="text-label-sm text-on-surface-variant">Uyğun xidmət tapılmadı</p>
-                            ) : (
-                              <div className="flex flex-col gap-2">
-                                <select
-                                  value={directedService[c.id] ?? ""}
-                                  onChange={e => setDirectedService(prev => ({ ...prev, [c.id]: e.target.value }))}
-                                  className="w-full text-label-sm border border-primary-container/20 rounded px-2 py-1.5 bg-surface-container-lowest text-on-surface focus:outline-none focus:border-secondary"
-                                >
-                                  <option value="">Xidmət seçin</option>
-                                  {matchedServices.map(s => (
-                                    <option key={s.id} value={s.id}>{s.name_az ?? s.name}</option>
-                                  ))}
-                                </select>
-                                {directedService[c.id] && (() => {
-                                  const svc = services.find(s => s.id === directedService[c.id]);
-                                  return svc ? (
-                                    <div className="rounded border border-primary-container/20 bg-surface-container-lowest p-sm text-label-sm text-on-surface-variant space-y-0.5">
-                                      {svc.contact_phone && <p><span className="material-symbols-outlined text-[13px] align-middle mr-1">call</span>{svc.contact_phone}</p>}
-                                      {svc.contact_email && <p><span className="material-symbols-outlined text-[13px] align-middle mr-1">mail</span>{svc.contact_email}</p>}
-                                      {svc.working_hours && <p><span className="material-symbols-outlined text-[13px] align-middle mr-1">schedule</span>{svc.working_hours}</p>}
-                                    </div>
-                                  ) : null;
-                                })()}
+                            <div className="flex items-center justify-between mb-2">
+                              <p className="text-label-sm font-semibold text-on-surface flex items-center gap-1">
+                                <span className="material-symbols-outlined text-[16px]">send</span>
+                                Xidmətə Yönləndir
+                              </p>
+                              <button
+                                type="button"
+                                onClick={() => handleSuggestService(c)}
+                                disabled={svcSuggestion[c.id]?.loading}
+                                className="flex items-center gap-1 text-label-sm text-secondary border border-secondary/30 rounded px-2 py-1 hover:bg-secondary-container/20 transition-colors disabled:opacity-60"
+                              >
+                                {svcSuggestion[c.id]?.loading
+                                  ? <><span className="material-symbols-outlined text-[14px] animate-spin">autorenew</span>AI analiz edir...</>
+                                  : <><span className="material-symbols-outlined text-[14px] filled">auto_awesome</span>AI Tövsiyəsi</>
+                                }
+                              </button>
+                            </div>
+
+                            {svcSuggestion[c.id]?.reasoning && !svcSuggestion[c.id]?.loading && (
+                              <div className="rounded border border-secondary-container bg-secondary-container/10 p-sm text-label-sm text-on-surface-variant mb-2">
+                                <span className="font-semibold text-secondary">AI: </span>{svcSuggestion[c.id].reasoning}
                               </div>
                             )}
+
+                            <div className="flex flex-col gap-2">
+                              <select
+                                value={directedService[c.id] ?? c.assigned_service_id ?? ""}
+                                onChange={e => setDirectedService(prev => ({ ...prev, [c.id]: e.target.value }))}
+                                className="w-full text-label-sm border border-primary-container/20 rounded px-2 py-1.5 bg-surface-container-lowest text-on-surface focus:outline-none focus:border-secondary"
+                              >
+                                <option value="">Xidmət seçin</option>
+                                {services.map(s => {
+                                  const isSuggested = svcSuggestion[c.id]?.suggested_ids?.includes(s.id);
+                                  return (
+                                    <option key={s.id} value={s.id}>
+                                      {isSuggested ? "★ " : ""}{s.name_az ?? s.name}
+                                    </option>
+                                  );
+                                })}
+                              </select>
+                              {(directedService[c.id] || c.assigned_service_id) && (() => {
+                                const svcId = directedService[c.id] ?? c.assigned_service_id;
+                                const svc = services.find(s => s.id === svcId);
+                                return svc ? (
+                                  <div className="rounded border border-primary-container/20 bg-surface-container-lowest p-sm text-label-sm text-on-surface-variant space-y-0.5">
+                                    {svc.contact_phone && <p><span className="material-symbols-outlined text-[13px] align-middle mr-1">call</span>{svc.contact_phone}</p>}
+                                    {svc.contact_email && <p><span className="material-symbols-outlined text-[13px] align-middle mr-1">mail</span>{svc.contact_email}</p>}
+                                    {svc.working_hours && <p><span className="material-symbols-outlined text-[13px] align-middle mr-1">schedule</span>{svc.working_hours}</p>}
+                                  </div>
+                                ) : null;
+                              })()}
+                            </div>
                           </div>
 
                           {/* Save button */}

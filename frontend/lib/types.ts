@@ -77,6 +77,8 @@ export interface Complaint {
   attachments: string[] | null;
   lat: number | null;
   lng: number | null;
+  deadline: string | null;
+  assigned_service_id: string | null;
   created_at: string;
   updated_at: string;
 }

@@ -1,13 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Header
 from supabase import Client
 from core.supabase_client import get_supabase
+from core.auth import require_admin
 from schemas.auth import TokenVerifyRequest, UserProfile
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
 
 @router.get("/users")
-def list_all_users(supabase: Client = Depends(get_supabase)):
+def list_all_users(supabase: Client = Depends(get_supabase), _: dict = Depends(require_admin)):
     """Admin endpoint: returns all users with email from auth.users + profile data."""
     try:
         auth_response = supabase.auth.admin.list_users()

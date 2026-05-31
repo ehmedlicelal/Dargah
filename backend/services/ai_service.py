@@ -146,6 +146,61 @@ async def analyze_complaint_with_image(
         return _DEFAULT_CLASSIFICATION.copy()
 
 
+async def suggest_service(
+    title: str,
+    description: str,
+    category: str | None,
+    services: list[dict],
+) -> dict:
+    """
+    Suggests the most relevant service(s) for a complaint.
+    Returns {suggested_ids: [...], reasoning: str}
+    """
+    if not services:
+        return {"suggested_ids": [], "reasoning": "Xidmət siyahısı boşdur."}
+
+    service_list = "\n".join(
+        f"- ID: {s['id']} | Ad: {s.get('name_az') or s.get('name')} | Kateqoriya: {s.get('category') or '-'}"
+        for s in services
+    )
+
+    prompt = f"""Aşağıdakı şikayəti nəzərə alaraq ən uyğun xidməti seç.
+
+Şikayət başlığı: {title}
+Şikayət məzmunu: {description}
+Kateqoriya: {category or "Bilinmir"}
+
+Mövcud xidmətlər:
+{service_list}
+
+YALNIZ JSON formatında cavab ver:
+{{
+  "suggested_ids": ["<id1>", "<id2>"],
+  "reasoning": "<30 sözdən az Azərbaycan dilində izahat>"
+}}
+(suggested_ids — ən çox 2 uyğun xidmətin ID-si)"""
+
+    response = await openrouter_chat([{"role": "user", "content": prompt}])
+
+    if response is None:
+        return {"suggested_ids": [], "reasoning": "AI xidmət tövsiyəsi alına bilmədi."}
+
+    try:
+        content = response["choices"][0]["message"]["content"].strip()
+        if content.startswith("```"):
+            content = content.split("```")[1]
+            if content.startswith("json"):
+                content = content[4:]
+        result = json.loads(content)
+        return {
+            "suggested_ids": result.get("suggested_ids", []),
+            "reasoning": result.get("reasoning", ""),
+        }
+    except (KeyError, json.JSONDecodeError, IndexError) as exc:
+        logger.warning("Failed to parse service suggestion response: %s", exc)
+        return {"suggested_ids": [], "reasoning": "AI cavabı oxuna bilmədi."}
+
+
 async def summarize_report(monitoring_rows: list[dict]) -> str:
     """
     Generates a natural-language Azerbaijani summary of monitoring data.

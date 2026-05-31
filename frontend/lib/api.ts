@@ -18,10 +18,13 @@ export interface AiAnalysis {
 const BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
 
 async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
+  const { data: { session } } = await supabase.auth.getSession();
+  const token = session?.access_token;
   const isWrite = options?.method && options.method !== "GET" && options.method !== "HEAD";
   const res = await fetch(`${BASE_URL}${path}`, {
     headers: {
       ...(isWrite ? { "Content-Type": "application/json" } : {}),
+      ...(token ? { "Authorization": `Bearer ${token}` } : {}),
       ...options?.headers,
     },
     ...options,
@@ -32,8 +35,6 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
   }
   return res.json() as Promise<T>;
 }
-
-// TODO: add auth header from Supabase session — pass token as Bearer in Authorization header
 
 export function fetchAirQuality(zoneId?: string, limit = 50): Promise<MonitoringData[]> {
   const params = new URLSearchParams({ limit: String(limit) });
@@ -96,11 +97,34 @@ export async function createComplaint(data: ComplaintCreate): Promise<Complaint>
 
 export function updateComplaint(
   id: string,
-  data: { status?: string; priority?: string; category?: string; report_content?: string },
+  data: {
+    status?: string;
+    priority?: string;
+    category?: string;
+    report_content?: string;
+    deadline?: string | null;
+    assigned_service_id?: string | null;
+  },
 ): Promise<Complaint> {
   return apiFetch(`/complaints/${id}`, {
     method: "PATCH",
     body: JSON.stringify(data),
+  });
+}
+
+export interface ServiceSuggestion {
+  suggested_ids: string[];
+  reasoning: string;
+}
+
+export function suggestService(
+  title: string,
+  description: string,
+  category?: string | null,
+): Promise<ServiceSuggestion> {
+  return apiFetch("/ai/suggest-service", {
+    method: "POST",
+    body: JSON.stringify({ title, description, category }),
   });
 }
 

@@ -17,6 +17,7 @@ class ComplaintCreate(BaseModel):
     citizen_name:   str | None = None
     citizen_father: str | None = None
     citizen_phone:  str | None = None
+    deadline: datetime | None = None
 
     @field_validator("title", "description")
     @classmethod
@@ -44,6 +45,8 @@ class ComplaintRead(BaseModel):
     citizen_father: str | None = None
     citizen_phone:  str | None = None
     report_content: str | None = None
+    deadline: datetime | None = None
+    assigned_service_id: UUID | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -55,3 +58,5 @@ class ComplaintUpdate(BaseModel):
     priority: str | None = None
     category: str | None = None
     report_content: str | None = None
+    deadline: datetime | None = None
+    assigned_service_id: UUID | None = None

@@ -1,6 +1,7 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from typing import Optional
+from core.auth import require_auth
 from services import ai_service
 
 router = APIRouter(prefix="/reports", tags=["Reports"])
@@ -19,7 +20,7 @@ class ReportRequest(BaseModel):
 
 
 @router.post("/generate")
-async def generate_report(body: ReportRequest):
+async def generate_report(body: ReportRequest, _: dict = Depends(require_auth)):
     report = await ai_service.generate_official_report(
         submission_type=body.submission_type,
         citizen_text=body.citizen_text,

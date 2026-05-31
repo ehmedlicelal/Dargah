@@ -2,6 +2,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from supabase import Client
 from core.supabase_client import get_supabase
+from core.auth import require_admin_or_operator, require_admin
 from crud import complaints as crud
 from schemas.complaints import ComplaintRead, ComplaintUpdate
 
@@ -35,8 +36,8 @@ def update_complaint(
     complaint_id: UUID,
     body: ComplaintUpdate,
     supabase: Client = Depends(get_supabase),
+    _: dict = Depends(require_admin_or_operator),
 ):
-    # TODO: add role check — only operator/admin can update
     update_data = body.model_dump(exclude_none=True)
     if not update_data:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Yeniləmə məlumatı boşdur")
@@ -50,8 +51,8 @@ def update_complaint(
 def delete_complaint(
     complaint_id: UUID,
     supabase: Client = Depends(get_supabase),
+    _: dict = Depends(require_admin),
 ):
-    # TODO: add role check — only admin can delete
     deleted = crud.delete_complaint(supabase, complaint_id)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Şikayət tapılmadı")

@@ -61,15 +61,19 @@ const STATUS_LABELS: Record<string, string> = {
   open: "Açıq", in_progress: "İcrada", resolved: "Həll edilib", closed: "Bağlı",
 };
 
+
 function buildComplaintsGeoJSON(complaints: Complaint[]): GeoJSON.FeatureCollection {
   return {
     type: "FeatureCollection",
     features: complaints
-      .filter((c) => c.lat != null && c.lng != null)
-      .map((c) => ({
-        type: "Feature",
-        geometry: { type: "Point", coordinates: [c.lng!, c.lat!] },
-        properties: { id: c.id, title: c.title, priority: c.priority, status: c.status },
+      .filter(c => c.lat != null && c.lng != null && c.status !== "resolved" && c.status !== "closed")
+      .map(c => ({
+        type: "Feature" as const,
+        geometry: { type: "Point" as const, coordinates: [c.lng!, c.lat!] },
+        properties: {
+          id: c.id, title: c.title, priority: c.priority,
+          status: c.status, category: c.category || "other",
+        },
       })),
   };
 }
@@ -77,10 +81,10 @@ function buildComplaintsGeoJSON(complaints: Complaint[]): GeoJSON.FeatureCollect
 function buildMonitoringGeoJSON(points: MonitoringPoint[]): GeoJSON.FeatureCollection {
   return {
     type: "FeatureCollection",
-    features: points.map((p) => ({
-      type: "Feature",
-      geometry: { type: "Point", coordinates: [p.lng, p.lat] },
-      properties: { id: p.id, type: p.type, label: p.label, statusText: p.statusText },
+    features: points.map(p => ({
+      type: "Feature" as const,
+      geometry: { type: "Point" as const, coordinates: [p.lng, p.lat] },
+      properties: { id: p.id, monType: p.type, label: p.label, statusText: p.statusText },
     })),
   };
 }
@@ -125,6 +129,8 @@ export default function NarimanovMap({
   const searchPopupRef = useRef<mapboxgl.Popup | null>(null);
   const selectedMarkerRef = useRef<mapboxgl.Marker | null>(null);
   const complaintsPopupRef = useRef<mapboxgl.Popup | null>(null);
+  const clusterLabelsRef = useRef<Map<number, HTMLElement>>(new Map());
+  const clickedStackRef = useRef<{ key: string; index: number }>({ key: "", index: 0 });
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onLocationSelectRef = useRef(onLocationSelect);
   const complaintsRef = useRef(complaints);
@@ -202,28 +208,7 @@ export default function NarimanovMap({
         paint: { "line-color": "#0078FF", "line-width": 2.5 },
       });
 
-      // Complaint markers (colored circles by priority)
-      map.addSource("complaints", {
-        type: "geojson",
-        data: buildComplaintsGeoJSON(complaintsRef.current),
-      });
-      map.addLayer({
-        id: "complaint-circles",
-        type: "circle",
-        source: "complaints",
-        paint: {
-          "circle-radius": ["match", ["get", "priority"],
-            "critical", 13, "high", 11, "medium", 9, "low", 8, 9],
-          "circle-color": ["match", ["get", "priority"],
-            "critical", "#ef4444", "high", "#f97316",
-            "medium", "#3b82f6", "low", "#22c55e", "#6b7280"],
-          "circle-stroke-width": 2.5,
-          "circle-stroke-color": "#ffffff",
-          "circle-opacity": 0.92,
-        },
-      });
-
-      // Monitoring markers
+      // ── Monitoring: individual dots, never clustered ──────────────────────────
       map.addSource("monitoring", {
         type: "geojson",
         data: buildMonitoringGeoJSON(monitoringPointsRef.current),
@@ -233,36 +218,138 @@ export default function NarimanovMap({
         type: "circle",
         source: "monitoring",
         paint: {
-          "circle-radius": 14,
-          "circle-color": ["match", ["get", "type"],
+          "circle-radius": 7,
+          "circle-color": ["match", ["get", "monType"],
             "air_quality", "#10b981", "traffic", "#f59e0b",
             "utilities", "#8b5cf6", "incident", "#ef4444", "#6b7280"],
-          "circle-stroke-width": 3,
+          "circle-stroke-width": 2,
           "circle-stroke-color": "#ffffff",
-          "circle-opacity": 0.55,
+          "circle-opacity": 0.9,
         },
       });
 
-      // Complaint marker click → popup
+      // ── Complaints: clustered by proximity (count = complaints only) ──────────
+      map.addSource("complaints", {
+        type: "geojson",
+        data: buildComplaintsGeoJSON(complaintsRef.current),
+        cluster: true,
+        clusterMaxZoom: 17,
+        clusterRadius: 80,
+      });
+
+      // Cluster bubble — only shown from zoom 11 up (below that, district is too small to bother)
+      map.addLayer({
+        id: "markers-cluster",
+        type: "circle",
+        source: "complaints",
+        filter: ["has", "point_count"],
+        minzoom: 11,
+        paint: {
+          "circle-color": ["step", ["get", "point_count"],
+            "#3b82f6", 5, "#f97316", 15, "#ef4444"],
+          "circle-radius": ["interpolate", ["linear"], ["get", "point_count"],
+            1, 18, 5, 24, 15, 30, 50, 38, 100, 46],
+          "circle-stroke-width": 3,
+          "circle-stroke-color": "#ffffff",
+          "circle-opacity": 0.93,
+        },
+      });
+
+      // Count label via HTML overlay so no font dependency
+      const container = map.getContainer();
+      map.on("render", () => {
+        if (!map.getLayer("markers-cluster")) return;
+        const clusterFeatures = map.queryRenderedFeatures({ layers: ["markers-cluster"] });
+        const seen = new Set<number>();
+        clusterFeatures.forEach(f => {
+          const props = f.properties as { cluster_id: number; point_count: number };
+          const id = props.cluster_id;
+          if (!id) return;
+          seen.add(id);
+          const [lng, lat] = (f.geometry as GeoJSON.Point).coordinates;
+          const { x, y } = map.project([lng, lat] as [number, number]);
+          let el = clusterLabelsRef.current.get(id);
+          if (!el) {
+            el = document.createElement("div");
+            el.style.cssText = "position:absolute;pointer-events:none;z-index:3;color:#fff;font-weight:800;font-size:14px;font-family:system-ui,sans-serif;line-height:1;transform:translate(-50%,-50%)";
+            container.appendChild(el);
+            clusterLabelsRef.current.set(id, el);
+          }
+          el.textContent = String(props.point_count);
+          el.style.left = `${x}px`;
+          el.style.top = `${y}px`;
+          el.style.display = "";
+        });
+        clusterLabelsRef.current.forEach((el, id) => {
+          if (!seen.has(id)) el.style.display = "none";
+        });
+      });
+
+      // Cluster click → zoom in automatically (no popup, no button)
+      map.on("click", "markers-cluster", (e) => {
+        const features = map.queryRenderedFeatures(e.point, { layers: ["markers-cluster"] });
+        if (!features.length) return;
+        const clusterId = features[0].properties?.cluster_id as number;
+        const coords = (features[0].geometry as GeoJSON.Point).coordinates as [number, number];
+        (map.getSource("complaints") as mapboxgl.GeoJSONSource).getClusterExpansionZoom(
+          clusterId,
+          (err, zoom) => {
+            if (!err && zoom != null) map.easeTo({ center: coords, zoom: zoom + 0.5, duration: 500 });
+          }
+        );
+      });
+
+      // Individual complaint circles (unclustered) — same minzoom as cluster
+      map.addLayer({
+        id: "complaint-circles",
+        type: "circle",
+        source: "complaints",
+        filter: ["!", ["has", "point_count"]],
+        minzoom: 11,
+        paint: {
+          "circle-radius": ["match", ["get", "priority"],
+            "critical", 13, "high", 11, "medium", 9, "low", 8, 9],
+          "circle-color": ["match", ["get", "priority"],
+            "critical", "#ef4444", "high", "#f97316",
+            "medium", "#3b82f6", "low", "#22c55e", "#6b7280"],
+          "circle-stroke-width": 2.5,
+          "circle-stroke-color": "#ffffff",
+          "circle-opacity": 0.95,
+        },
+      });
+
+      // Complaint click → popup; same-coordinate stacks cycle on repeated clicks
       map.on("click", "complaint-circles", (e) => {
-        const feature = e.features?.[0];
-        if (!feature) return;
+        const features = map.queryRenderedFeatures(
+          [[e.point.x - 6, e.point.y - 6], [e.point.x + 6, e.point.y + 6]],
+          { layers: ["complaint-circles"] }
+        );
+        if (!features.length) return;
+        const stackKey = features.map(f => (f.properties as Record<string,string>).id).sort().join("|");
+        if (clickedStackRef.current.key === stackKey) {
+          clickedStackRef.current.index = (clickedStackRef.current.index + 1) % features.length;
+        } else {
+          clickedStackRef.current = { key: stackKey, index: 0 };
+        }
+        const feature = features[clickedStackRef.current.index];
+        const total = features.length;
+        const idx   = clickedStackRef.current.index;
         const props = feature.properties as Record<string, string>;
         const coords = (feature.geometry as GeoJSON.Point).coordinates as [number, number];
         const color = PRIORITY_COLORS[props.priority] ?? "#6b7280";
-
         complaintsPopupRef.current?.remove();
         complaintsPopupRef.current = new mapboxgl.Popup({ offset: 12 })
           .setLngLat(coords)
           .setHTML(`
             <div style="font-family:system-ui,sans-serif;font-size:13px;max-width:220px">
+              ${total > 1 ? `<div style="font-size:10px;color:#888;margin-bottom:5px;display:flex;justify-content:space-between"><span>${idx+1} / ${total}</span><span style="color:#2563eb">klikləyin →</span></div>` : ""}
               <div style="font-size:14px;font-weight:600;color:#111;margin-bottom:6px">${props.title}</div>
               <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
                 <span style="background:${color}22;color:${color};border:1px solid ${color}55;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600">
-                  ${PRIORITY_LABELS[props.priority] ?? props.priority}
+                  ${PRIORITY_LABELS[props.priority]??props.priority}
                 </span>
                 <span style="background:#f3f4f6;color:#374151;padding:2px 8px;border-radius:12px;font-size:11px">
-                  ${STATUS_LABELS[props.status] ?? props.status}
+                  ${STATUS_LABELS[props.status]??props.status}
                 </span>
               </div>
               <a href="/complaints/${props.id}" style="font-size:11px;color:#2563eb;font-weight:500">Ətraflı bax →</a>
@@ -270,13 +357,12 @@ export default function NarimanovMap({
           .addTo(map);
       });
 
-      // Monitoring marker click → popup
+      // Monitoring click → popup
       map.on("click", "monitoring-circles", (e) => {
         const feature = e.features?.[0];
         if (!feature) return;
-        const props = feature.properties as Record<string, string>;
+        const props  = feature.properties as Record<string, string>;
         const coords = (feature.geometry as GeoJSON.Point).coordinates as [number, number];
-
         new mapboxgl.Popup({ offset: 12 })
           .setLngLat(coords)
           .setHTML(`
@@ -287,8 +373,8 @@ export default function NarimanovMap({
           .addTo(map);
       });
 
-      // Pointer cursor on hoverable layers
-      ["complaint-circles", "monitoring-circles"].forEach((layer) => {
+      // Pointer cursors
+      ["markers-cluster", "complaint-circles", "monitoring-circles"].forEach(layer => {
         map.on("mouseenter", layer, () => { map.getCanvas().style.cursor = "pointer"; });
         map.on("mouseleave", layer, () => {
           map.getCanvas().style.cursor = onLocationSelectRef.current ? "crosshair" : "";
@@ -371,6 +457,8 @@ export default function NarimanovMap({
     });
 
     return () => {
+      clusterLabelsRef.current.forEach(el => el.remove());
+      clusterLabelsRef.current.clear();
       searchMarkerRef.current?.remove();
       searchPopupRef.current?.remove();
       selectedMarkerRef.current?.remove();
@@ -381,7 +469,6 @@ export default function NarimanovMap({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── Sync data sources after map loads ──────────────────────────────────
   useEffect(() => {
     const src = mapRef.current?.getSource("complaints") as mapboxgl.GeoJSONSource | undefined;
     src?.setData(buildComplaintsGeoJSON(complaints));

@@ -128,6 +128,48 @@ const MONITORING_LEGEND = [
   { label: "Hadisə",          color: "#ef4444" },
 ] as const;
 
+// ── Filter option data ───────────────────────────────────────────────────────
+const PRIORITY_FILTER_OPTS = [
+  { value: "low",      label: "Aşağı",  color: "#22c55e" },
+  { value: "medium",   label: "Orta",   color: "#3b82f6" },
+  { value: "high",     label: "Yüksək", color: "#f97316" },
+  { value: "critical", label: "Kritik", color: "#ef4444" },
+];
+const STATUS_FILTER_OPTS = [
+  { value: "open",        label: "Açıq",       color: "#60a5fa" },
+  { value: "in_progress", label: "İcrada",      color: "#f59e0b" },
+  { value: "resolved",    label: "Həll edildi", color: "#22c55e" },
+  { value: "closed",      label: "Bağlı",       color: "#6b7280" },
+];
+const CATEGORY_FILTER_OPTS = [
+  { value: "road",        label: "Yol",          color: "#f97316" },
+  { value: "utilities",   label: "Kommunal",     color: "#8b5cf6" },
+  { value: "environment", label: "Ekologiya",    color: "#10b981" },
+  { value: "safety",      label: "Təhlükəsizlik",color: "#ef4444" },
+  { value: "social",      label: "Sosial",       color: "#3b82f6" },
+  { value: "other",       label: "Digər",        color: "#6b7280" },
+];
+
+function FilterChip({ label, color, selected, onClick }: {
+  label: string; color: string; selected: boolean; onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        padding: "4px 10px", borderRadius: 20, cursor: "pointer",
+        border: `1px solid ${selected ? color : "rgba(255,255,255,0.12)"}`,
+        background: selected ? `${color}33` : "rgba(255,255,255,0.05)",
+        color: selected ? color : "rgba(226,232,240,0.55)",
+        fontSize: 11, fontWeight: selected ? 700 : 400,
+        transition: "all 0.15s", whiteSpace: "nowrap",
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 function MapPageContent() {
   // Map instance (received via onMapReady callback)
@@ -151,7 +193,28 @@ function MapPageContent() {
   const [p2Collapsed, setP2Collapsed] = useState(false); // complaints bottom-left
   const [p3Collapsed, setP3Collapsed] = useState(false); // search top-center
   const [p5Collapsed, setP5Collapsed] = useState(false); // AQI bottom-right
+  const [p6Collapsed, setP6Collapsed] = useState(true);  // filter panel right
   const [navCollapsed, setNavCollapsed] = useState(false); // topbar (map page only)
+
+  // ── Filter state ───────────────────────────────────────────────────────────
+  const [filterPriorities,  setFilterPriorities]  = useState<Set<string>>(new Set());
+  const [filterStatuses,    setFilterStatuses]    = useState<Set<string>>(new Set());
+  const [filterCategories,  setFilterCategories]  = useState<Set<string>>(new Set());
+
+  const toggleFilter = (setter: React.Dispatch<React.SetStateAction<Set<string>>>, value: string) =>
+    setter(prev => {
+      const next = new Set(prev);
+      next.has(value) ? next.delete(value) : next.add(value);
+      return next;
+    });
+
+  const clearAllFilters = () => {
+    setFilterPriorities(new Set());
+    setFilterStatuses(new Set());
+    setFilterCategories(new Set());
+  };
+
+  const activeFilterCount = filterPriorities.size + filterStatuses.size + filterCategories.size;
   const [isDark,    setIsDark]    = useState(true);   // map color theme
   const [mapReady,  setMapReady]  = useState(false);  // true once onMapReady fires
 
@@ -208,6 +271,13 @@ function MapPageContent() {
   // ── Derived values ─────────────────────────────────────────────────────────
   const selectedZone  = zones.find((z) => z.id === selectedZoneId);
   const openCount     = complaints.filter((c) => c.status === "open").length;
+
+  const filteredComplaints = complaints.filter(c => {
+    if (filterPriorities.size > 0 && !filterPriorities.has(c.priority)) return false;
+    if (filterStatuses.size > 0 && !filterStatuses.has(c.status)) return false;
+    if (filterCategories.size > 0 && !filterCategories.has(c.category ?? "")) return false;
+    return true;
+  });
   const highCount     = complaints.filter((c) => c.priority === "high"     && c.status === "open").length;
   const criticalCount = complaints.filter((c) => c.priority === "critical" && c.status === "open").length;
   const latestAqi     = (zoneDetail?.latest_air_quality as Record<string, unknown> | undefined)
@@ -523,7 +593,7 @@ function MapPageContent() {
       {/* ── FULL-SCREEN MAP ────────────────────────────────────────────────── */}
       <div style={{ position: "absolute", inset: 0 }}>
         <NarimanovMap
-          complaints={complaints}
+          complaints={filteredComplaints}
           monitoringPoints={monitoringPoints}
           hideBuiltinUI
           mapStyle={MAP_STYLE}
@@ -1050,6 +1120,118 @@ function MapPageContent() {
           </button>
         </div>
         </div>{/* end sliding content */}
+      </div>
+
+      {/* ═══════════════════════════════════════════════════════════════════ */}
+      {/* PANEL 6 — Right-middle: Complaint filters                          */}
+      {/* ═══════════════════════════════════════════════════════════════════ */}
+      <div style={{
+        position: "absolute", top: 96, right: 16, zIndex: 20,
+        display: "flex", alignItems: "flex-start", pointerEvents: "auto",
+      }}>
+        {/* Arrow tab on the LEFT (right-side panel) */}
+        <button
+          onClick={() => setP6Collapsed(!p6Collapsed)}
+          title={p6Collapsed ? "Filtri aç" : "Filtri bağla"}
+          style={{
+            background: "rgba(6,11,32,0.84)", backdropFilter: "blur(24px)",
+            WebkitBackdropFilter: "blur(24px)", border: "1px solid rgba(255,255,255,0.07)",
+            borderRight: "none", borderRadius: "8px 0 0 8px", padding: "10px 6px",
+            cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center",
+            gap: 4, alignSelf: "stretch", minHeight: 44,
+            color: activeFilterCount > 0 ? "#00d4ff" : "rgba(226,232,240,0.5)",
+            flexShrink: 0, position: "relative",
+          }}
+        >
+          {/* Filter funnel icon */}
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>
+          </svg>
+          {activeFilterCount > 0 && (
+            <span style={{
+              width: 16, height: 16, borderRadius: "50%",
+              background: "#00d4ff", color: "#06090f",
+              fontSize: 9, fontWeight: 800, lineHeight: "16px", textAlign: "center",
+            }}>{activeFilterCount}</span>
+          )}
+        </button>
+
+        {/* Sliding panel content */}
+        <div style={{
+          overflow: "hidden", width: p6Collapsed ? 0 : 252,
+          transition: "width 0.35s ease", flexShrink: 0,
+        }}>
+          <div style={{ ...G, padding: 16, width: 252 }}>
+
+            {/* Header */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#00d4ff", boxShadow: "0 0 8px #00d4ff" }} />
+                <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", color: "rgba(226,232,240,0.5)", textTransform: "uppercase" }}>Filtr</span>
+              </div>
+              {activeFilterCount > 0 && (
+                <button onClick={clearAllFilters} style={{
+                  background: "none", border: "none", cursor: "pointer",
+                  fontSize: 11, color: "#00d4ff", fontFamily: "system-ui,sans-serif",
+                }}>Sıfırla</button>
+              )}
+            </div>
+
+            {/* Priority */}
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", color: "rgba(226,232,240,0.4)", textTransform: "uppercase", marginBottom: 8 }}>Kritiklik</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                {PRIORITY_FILTER_OPTS.map(o => (
+                  <FilterChip key={o.value} label={o.label} color={o.color}
+                    selected={filterPriorities.has(o.value)}
+                    onClick={() => toggleFilter(setFilterPriorities, o.value)} />
+                ))}
+              </div>
+            </div>
+
+            {/* Divider */}
+            <div style={{ height: 1, background: "rgba(255,255,255,0.06)", marginBottom: 14 }} />
+
+            {/* Status */}
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", color: "rgba(226,232,240,0.4)", textTransform: "uppercase", marginBottom: 8 }}>Status</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                {STATUS_FILTER_OPTS.map(o => (
+                  <FilterChip key={o.value} label={o.label} color={o.color}
+                    selected={filterStatuses.has(o.value)}
+                    onClick={() => toggleFilter(setFilterStatuses, o.value)} />
+                ))}
+              </div>
+            </div>
+
+            {/* Divider */}
+            <div style={{ height: 1, background: "rgba(255,255,255,0.06)", marginBottom: 14 }} />
+
+            {/* Category */}
+            <div>
+              <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", color: "rgba(226,232,240,0.4)", textTransform: "uppercase", marginBottom: 8 }}>Kateqoriya</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                {CATEGORY_FILTER_OPTS.map(o => (
+                  <FilterChip key={o.value} label={o.label} color={o.color}
+                    selected={filterCategories.has(o.value)}
+                    onClick={() => toggleFilter(setFilterCategories, o.value)} />
+                ))}
+              </div>
+            </div>
+
+            {/* Result count */}
+            <div style={{
+              marginTop: 14, paddingTop: 12, borderTop: "1px solid rgba(255,255,255,0.06)",
+              fontSize: 12, color: "rgba(226,232,240,0.55)", textAlign: "center",
+            }}>
+              {activeFilterCount > 0
+                ? `${filteredComplaints.length} / ${complaints.length} şikayət`
+                : `${complaints.length} şikayət`}
+            </div>
+
+          </div>
+        </div>
       </div>
 
       {/* Global styles scoped to this page */}

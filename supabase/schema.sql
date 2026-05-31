@@ -259,11 +259,15 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 -- COMPLAINTS — extended citizen info + report storage
 -- Run these ALTER statements if the table already exists
 -- ============================================================
-ALTER TABLE public.complaints ADD COLUMN IF NOT EXISTS submission_type TEXT DEFAULT 'Şikayət';
-ALTER TABLE public.complaints ADD COLUMN IF NOT EXISTS citizen_name   TEXT;
-ALTER TABLE public.complaints ADD COLUMN IF NOT EXISTS citizen_father TEXT;
-ALTER TABLE public.complaints ADD COLUMN IF NOT EXISTS citizen_phone  TEXT;
-ALTER TABLE public.complaints ADD COLUMN IF NOT EXISTS report_content TEXT;
+ALTER TABLE public.complaints ADD COLUMN IF NOT EXISTS submission_type      TEXT DEFAULT 'Şikayət';
+ALTER TABLE public.complaints ADD COLUMN IF NOT EXISTS citizen_name          TEXT;
+ALTER TABLE public.complaints ADD COLUMN IF NOT EXISTS citizen_father        TEXT;
+ALTER TABLE public.complaints ADD COLUMN IF NOT EXISTS citizen_phone         TEXT;
+ALTER TABLE public.complaints ADD COLUMN IF NOT EXISTS report_content        TEXT;
+ALTER TABLE public.complaints ADD COLUMN IF NOT EXISTS deadline              TIMESTAMPTZ;
+ALTER TABLE public.complaints ADD COLUMN IF NOT EXISTS assigned_service_id  UUID REFERENCES public.services(id) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS idx_complaints_deadline ON public.complaints (deadline) WHERE deadline IS NOT NULL;
 
 CREATE TRIGGER on_auth_user_created
     AFTER INSERT ON auth.users
