@@ -264,7 +264,7 @@ function MapPageContent() {
   useEffect(() => {
     if (!selectedZoneId) return;
     fetchZoneDetail(selectedZoneId)
-      .then((data) => setZoneDetail(data as Record<string, unknown>))
+      .then((data) => setZoneDetail(data as unknown as Record<string, unknown>))
       .catch(() => setZoneDetail(null));
   }, [selectedZoneId]);
 
@@ -298,7 +298,7 @@ function MapPageContent() {
     if (!map) return;
 
     const set = (id: string, prop: string, val: unknown) => {
-      try { if (map.getLayer(id)) map.setPaintProperty(id, prop, val); } catch {}
+      try { if (map.getLayer(id)) map.setPaintProperty(id, prop as never, val as never); } catch {}
     };
 
     // Layer IDs from mapbox://styles/mapbox/dark-v11
@@ -348,6 +348,22 @@ function MapPageContent() {
       set("admin-0-boundary",              "line-color",           "#a8a4a0");
       set("admin-1-boundary",              "line-color",           "#b8b4b0");
       set("admin-0-boundary-bg",           "line-color",           "#f0ede6");
+      // Road lines — muted orthodox light-map palette
+      set("road-motorway-trunk",           "line-color",           "#e8a050");
+      set("road-motorway",                 "line-color",           "#e8a050");
+      set("road-trunk",                    "line-color",           "#e8a050");
+      set("road-primary",                  "line-color",           "#f0cc70");
+      set("road-secondary-tertiary",       "line-color",           "#dedad2");
+      set("road-street-low",               "line-color",           "#e8e4dc");
+      set("road-street",                   "line-color",           "#e8e4dc");
+      set("road-minor",                    "line-color",           "#ece8e0");
+      set("road-path",                     "line-color",           "#dcd8ce");
+      set("road-pedestrian",               "line-color",           "#e0dcd4");
+      set("road-motorway-trunk-case",      "line-color",           "#c88030");
+      set("road-primary-case",             "line-color",           "#d4a840");
+      set("road-secondary-tertiary-case",  "line-color",           "#ccc8c0");
+      set("road-street-case",              "line-color",           "#d4d0c8");
+      set("road-minor-case",               "line-color",           "#d8d4cc");
     }
   }, []);
 

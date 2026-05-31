@@ -79,6 +79,7 @@ export interface Complaint {
   lng: number | null;
   deadline: string | null;
   assigned_service_id: string | null;
+  votes: number;
   created_at: string;
   updated_at: string;
 }

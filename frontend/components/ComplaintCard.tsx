@@ -20,6 +20,7 @@ const categoryLabels: Record<string, string> = {
 export default function ComplaintCard({ complaint }: ComplaintCardProps) {
   const date = new Date(complaint.created_at).toLocaleDateString("az-AZ");
   const categoryLabel = categoryLabels[complaint.category ?? "other"] ?? complaint.category;
+  const votes = complaint.votes ?? 0;
 
   return (
     <div className="bg-white rounded-lg border border-gray-200 p-4 shadow-sm hover:shadow-md transition-shadow">
@@ -42,7 +43,18 @@ export default function ComplaintCard({ complaint }: ComplaintCardProps) {
         <StatusBadge status={complaint.priority} variant="priority" />
       </div>
 
-      <p className="text-xs text-gray-500 mt-2">{date}</p>
+      <div className="flex items-center justify-between mt-2">
+        <p className="text-xs text-gray-500">{date}</p>
+        {votes !== 0 && (
+          <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+            votes > 0
+              ? "bg-green-50 text-green-700"
+              : "bg-red-50 text-red-600"
+          }`}>
+            {votes > 0 ? "▲" : "▼"} {Math.abs(votes)} səs
+          </span>
+        )}
+      </div>
     </div>
   );
 }

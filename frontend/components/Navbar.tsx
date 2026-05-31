@@ -12,6 +12,7 @@ const PUBLIC_NAV = [
 
 const CITIZEN_NAV = [
   { href: "/complaints", label: "Şikayətlər" },
+  { href: "/map",        label: "Xəritə"     },
   { href: "/citizen",    label: "Profilim"   },
 ];
 

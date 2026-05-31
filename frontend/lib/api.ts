@@ -219,3 +219,14 @@ export function generateReport(data: ReportRequest): Promise<{ report: string }>
     body: JSON.stringify(data),
   });
 }
+
+export function deleteComplaint(id: string): Promise<void> {
+  return apiFetch(`/complaints/${id}`, { method: "DELETE" });
+}
+
+export function voteComplaint(id: string, delta: 1 | -1): Promise<Complaint> {
+  return apiFetch(`/complaints/${id}/vote`, {
+    method: "POST",
+    body: JSON.stringify({ delta }),
+  });
+}

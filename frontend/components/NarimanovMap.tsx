@@ -61,6 +61,25 @@ const STATUS_LABELS: Record<string, string> = {
   open: "Açıq", in_progress: "İcrada", resolved: "Həll edilib", closed: "Bağlı",
 };
 
+// White SVG icons per complaint category (24×24 viewBox, fill="white")
+const CATEGORY_SVGS: Record<string, string> = {
+  road: `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24"><path fill="white" d="M18.92 6.01C18.72 5.42 18.16 5 17.5 5h-11c-.66 0-1.21.42-1.42 1.01L3 12v8c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-1h12v1c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-8l-2.08-5.99zM6.5 16c-.83 0-1.5-.67-1.5-1.5S5.67 13 6.5 13s1.5.67 1.5 1.5S7.33 16 6.5 16zm11 0c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zM5 11l1.5-4.5h11L19 11H5z"/></svg>`,
+  utilities: `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24"><path fill="white" d="M12 2c-5.33 4.55-8 8.48-8 11.8 0 4.98 3.8 8.2 8 8.2s8-3.22 8-8.2c0-3.32-2.67-7.25-8-11.8z"/></svg>`,
+  environment: `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24"><path fill="white" d="M17 8C8 10 5.9 16.17 3.82 21H5.71c.51-1.36 1.06-2.6 1.67-3.71A11.05 11.05 0 0 0 12 19c5.45 0 10-3.86 10-10A7 7 0 0 0 17 8z"/></svg>`,
+  safety: `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24"><path fill="white" d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z"/></svg>`,
+  social: `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24"><path fill="white" d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>`,
+  other: `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24"><path fill="white" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17h-2v-2h2v2zm2.07-7.75l-.9.92C13.45 12.9 13 13.5 13 15h-2v-.5c0-1.1.45-2.1 1.17-2.83l1.24-1.26c.37-.36.59-.86.59-1.41 0-1.1-.9-2-2-2s-2 .9-2 2H8c0-2.21 1.79-4 4-4s4 1.79 4 4c0 .88-.36 1.68-.93 2.25z"/></svg>`,
+};
+
+function loadSVGAsMapboxImage(svg: string, size = 32): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image(size, size);
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+  });
+}
+
 
 function buildComplaintsGeoJSON(complaints: Complaint[]): GeoJSON.FeatureCollection {
   return {
@@ -73,6 +92,7 @@ function buildComplaintsGeoJSON(complaints: Complaint[]): GeoJSON.FeatureCollect
         properties: {
           id: c.id, title: c.title, priority: c.priority,
           status: c.status, category: c.category || "other",
+          votes: c.votes ?? 0,
         },
       })),
   };
@@ -103,10 +123,11 @@ interface NarimanovMapProps {
   onLocationSelect?: (lat: number, lng: number) => void;
   selectedLocation?: { lat: number; lng: number } | null;
   hideBuiltinUI?: boolean;
-  mapStyle?: string | object;
+  mapStyle?: string;
   initialBearing?: number;
   onMapReady?: (map: mapboxgl.Map) => void;
   onBuildingClick?: (featureId: string, lat: number, lng: number) => void;
+  onComplaintClick?: (complaintId: string) => void;
 }
 
 export default function NarimanovMap({
@@ -119,6 +140,7 @@ export default function NarimanovMap({
   initialBearing = 0,
   onMapReady,
   onBuildingClick,
+  onComplaintClick,
 }: NarimanovMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
@@ -133,10 +155,12 @@ export default function NarimanovMap({
   const clickedStackRef = useRef<{ key: string; index: number }>({ key: "", index: 0 });
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onLocationSelectRef = useRef(onLocationSelect);
+  const onComplaintClickRef = useRef(onComplaintClick);
   const complaintsRef = useRef(complaints);
   const monitoringPointsRef = useRef(monitoringPoints);
 
   onLocationSelectRef.current = onLocationSelect;
+  onComplaintClickRef.current = onComplaintClick;
   complaintsRef.current = complaints;
   monitoringPointsRef.current = monitoringPoints;
 
@@ -166,7 +190,7 @@ export default function NarimanovMap({
 
     map.addControl(new mapboxgl.NavigationControl(), "top-right");
 
-    map.on("load", () => {
+    map.on("load", async () => {
       // 3D buildings — skip if the custom style already defines this layer
       if (!map.getLayer("3d-buildings")) {
         try {
@@ -218,7 +242,13 @@ export default function NarimanovMap({
         type: "circle",
         source: "monitoring",
         paint: {
-          "circle-radius": 7,
+          "circle-radius": [
+            "interpolate", ["linear"], ["zoom"],
+            11, 4,
+            14, 6,
+            17, 9,
+            20, 14
+          ],
           "circle-color": ["match", ["get", "monType"],
             "air_quality", "#10b981", "traffic", "#f59e0b",
             "utilities", "#8b5cf6", "incident", "#ef4444", "#6b7280"],
@@ -287,6 +317,7 @@ export default function NarimanovMap({
 
       // Cluster click → zoom in automatically (no popup, no button)
       map.on("click", "markers-cluster", (e) => {
+        (e as any).clickHandled = true;
         const features = map.queryRenderedFeatures(e.point, { layers: ["markers-cluster"] });
         if (!features.length) return;
         const clusterId = features[0].properties?.cluster_id as number;
@@ -307,8 +338,13 @@ export default function NarimanovMap({
         filter: ["!", ["has", "point_count"]],
         minzoom: 11,
         paint: {
-          "circle-radius": ["match", ["get", "priority"],
-            "critical", 13, "high", 11, "medium", 9, "low", 8, 9],
+          "circle-radius": [
+            "interpolate", ["linear"], ["zoom"],
+            11, ["match", ["get", "priority"], "critical", 8, "high", 7, "medium", 6, "low", 5, 6],
+            14, ["match", ["get", "priority"], "critical", 11, "high", 9, "medium", 8, "low", 7, 8],
+            17, ["match", ["get", "priority"], "critical", 15, "high", 13, "medium", 11, "low", 10, 11],
+            20, ["match", ["get", "priority"], "critical", 22, "high", 19, "medium", 16, "low", 14, 16]
+          ],
           "circle-color": ["match", ["get", "priority"],
             "critical", "#ef4444", "high", "#f97316",
             "medium", "#3b82f6", "low", "#22c55e", "#6b7280"],
@@ -318,30 +354,56 @@ export default function NarimanovMap({
         },
       });
 
-      // Complaint click → popup; same-coordinate stacks cycle on repeated clicks
-      map.on("click", "complaint-circles", (e) => {
+      // Complaint click → custom callback (citizen mode) or popup (admin mode)
+      let lastComplaintClickTs = 0;
+      const handleComplaintClick = (e: mapboxgl.MapMouseEvent) => {
+        (e as any).clickHandled = true;
+        const now = Date.now();
+        if (now - lastComplaintClickTs < 80) return;
+        lastComplaintClickTs = now;
+
+        const layersToQuery = ["complaint-circles"];
+        if (map.getLayer("complaint-icons")) layersToQuery.push("complaint-icons");
         const features = map.queryRenderedFeatures(
-          [[e.point.x - 6, e.point.y - 6], [e.point.x + 6, e.point.y + 6]],
-          { layers: ["complaint-circles"] }
+          [[e.point.x - 8, e.point.y - 8], [e.point.x + 8, e.point.y + 8]],
+          { layers: layersToQuery }
         );
         if (!features.length) return;
-        const stackKey = features.map(f => (f.properties as Record<string,string>).id).sort().join("|");
+
+        // Dedup by id (icon + circle may both appear)
+        const seen = new Set<string>();
+        const unique = features.filter(f => {
+          const id = (f.properties as Record<string,string>).id;
+          if (seen.has(id)) return false;
+          seen.add(id);
+          return true;
+        });
+
+        const stackKey = unique.map(f => (f.properties as Record<string,string>).id).sort().join("|");
         if (clickedStackRef.current.key === stackKey) {
-          clickedStackRef.current.index = (clickedStackRef.current.index + 1) % features.length;
+          clickedStackRef.current.index = (clickedStackRef.current.index + 1) % unique.length;
         } else {
           clickedStackRef.current = { key: stackKey, index: 0 };
         }
-        const feature = features[clickedStackRef.current.index];
-        const total = features.length;
-        const idx   = clickedStackRef.current.index;
+        const feature = unique[clickedStackRef.current.index];
         const props = feature.properties as Record<string, string>;
+
+        // In citizen mode: delegate to parent; in admin mode: show popup
+        if (onComplaintClickRef.current) {
+          onComplaintClickRef.current(props.id);
+          return;
+        }
+
+        const total = unique.length;
+        const idx   = clickedStackRef.current.index;
         const coords = (feature.geometry as GeoJSON.Point).coordinates as [number, number];
         const color = PRIORITY_COLORS[props.priority] ?? "#6b7280";
+        const votes = Number(props.votes ?? 0);
         complaintsPopupRef.current?.remove();
         complaintsPopupRef.current = new mapboxgl.Popup({ offset: 12 })
           .setLngLat(coords)
           .setHTML(`
-            <div style="font-family:system-ui,sans-serif;font-size:13px;max-width:220px">
+            <div style="font-family:system-ui,sans-serif;font-size:13px;max-width:230px">
               ${total > 1 ? `<div style="font-size:10px;color:#888;margin-bottom:5px;display:flex;justify-content:space-between"><span>${idx+1} / ${total}</span><span style="color:#2563eb">klikləyin →</span></div>` : ""}
               <div style="font-size:14px;font-weight:600;color:#111;margin-bottom:6px">${props.title}</div>
               <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
@@ -351,14 +413,19 @@ export default function NarimanovMap({
                 <span style="background:#f3f4f6;color:#374151;padding:2px 8px;border-radius:12px;font-size:11px">
                   ${STATUS_LABELS[props.status]??props.status}
                 </span>
+                ${votes !== 0 ? `<span style="background:#f0fdf4;color:#16a34a;padding:2px 8px;border-radius:12px;font-size:11px">${votes > 0 ? "+" : ""}${votes} səs</span>` : ""}
               </div>
               <a href="/complaints/${props.id}" style="font-size:11px;color:#2563eb;font-weight:500">Ətraflı bax →</a>
             </div>`)
           .addTo(map);
-      });
+      };
+
+      map.on("click", "complaint-circles", handleComplaintClick);
+      map.on("click", "complaint-icons", handleComplaintClick);
 
       // Monitoring click → popup
       map.on("click", "monitoring-circles", (e) => {
+        (e as any).clickHandled = true;
         const feature = e.features?.[0];
         if (!feature) return;
         const props  = feature.properties as Record<string, string>;
@@ -374,7 +441,7 @@ export default function NarimanovMap({
       });
 
       // Pointer cursors
-      ["markers-cluster", "complaint-circles", "monitoring-circles"].forEach(layer => {
+      ["markers-cluster", "complaint-circles", "complaint-icons", "monitoring-circles"].forEach(layer => {
         map.on("mouseenter", layer, () => { map.getCanvas().style.cursor = "pointer"; });
         map.on("mouseleave", layer, () => {
           map.getCanvas().style.cursor = onLocationSelectRef.current ? "crosshair" : "";
@@ -414,6 +481,7 @@ export default function NarimanovMap({
 
       // ── Click: toggle building highlight + location pick ────────────────
       map.on("click", (e) => {
+        if ((e as any).clickHandled) return;
         const buildingLayers = ["3d-buildings", "building-fill"].filter(
           (id) => !!map.getLayer(id),
         );
@@ -450,6 +518,47 @@ export default function NarimanovMap({
 
       if (onLocationSelect) {
         map.getCanvas().style.cursor = "crosshair";
+      }
+
+      // Load SVG category icons as Mapbox SDF images, then add symbol layer on top
+      await Promise.allSettled(
+        Object.entries(CATEGORY_SVGS).map(async ([cat, svg]) => {
+          const img = await loadSVGAsMapboxImage(svg);
+          if (!map.hasImage(`cat-${cat}`)) map.addImage(`cat-${cat}`, img, { sdf: true });
+        })
+      );
+
+      if (!map.getLayer("complaint-icons")) {
+        map.addLayer({
+          id: "complaint-icons",
+          type: "symbol",
+          source: "complaints",
+          filter: ["!", ["has", "point_count"]],
+          minzoom: 11,
+          layout: {
+            "icon-image": ["match", ["get", "category"],
+              "road", "cat-road",
+              "utilities", "cat-utilities",
+              "environment", "cat-environment",
+              "safety", "cat-safety",
+              "social", "cat-social",
+              "cat-other",
+            ],
+            "icon-size": [
+              "interpolate", ["linear"], ["zoom"],
+              11, 0.35,
+              14, 0.5,
+              17, 0.7,
+              20, 1.0
+            ],
+            "icon-allow-overlap": true,
+            "icon-ignore-placement": true,
+          },
+          paint: {
+            "icon-color": "white",
+            "icon-opacity": 0.9,
+          },
+        });
       }
 
       // Notify parent the map is fully loaded and ready to use

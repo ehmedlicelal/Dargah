@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   analyzeComplaint, fetchComplaints, fetchServices, fetchZones,
   generateReport, updateComplaint, createComplaint, suggestService,
+  deleteComplaint,
   type ReportRequest, type ServiceSuggestion,
 } from "@/lib/api";
 import type { AiAnalysis } from "@/lib/api";
@@ -125,6 +126,7 @@ function DashboardContent() {
   const [directedService, setDirectedService] = useState<Record<string, string>>({});
   const [editingDeadline, setEditingDeadline] = useState<Record<string, string>>({});
   const [savingExtra, setSavingExtra] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [svcSuggestion, setSvcSuggestion] = useState<Record<string, ServiceSuggestion & { loading?: boolean }>>({});
 
   // Submit form state
@@ -244,6 +246,17 @@ function DashboardContent() {
       const updated = await updateComplaint(id, { status });
       setComplaints(prev => prev.map(c => c.id === id ? updated : c));
     } catch { alert("Status yenilənmədi."); }
+  }
+
+  async function handleDelete(id: string, title: string) {
+    if (!confirm(`"${title}" şikayətini silmək istədiyinizdən əminsiniz?`)) return;
+    setDeletingId(id);
+    try {
+      await deleteComplaint(id);
+      setComplaints(prev => prev.filter(c => c.id !== id));
+      if (expandedId === id) setExpandedId(null);
+    } catch { alert("Şikayət silinmədi."); }
+    finally { setDeletingId(null); }
   }
 
   async function handleSaveExtras(c: Complaint) {
@@ -601,6 +614,18 @@ function DashboardContent() {
                                 {isExpanded ? "expand_less" : "expand_more"}
                               </span>
                               {isExpanded ? "Bağla" : "Ətraflı"}
+                            </button>
+
+                            <button
+                              onClick={() => handleDelete(c.id.toString(), c.title)}
+                              disabled={deletingId === c.id.toString()}
+                              className="flex items-center gap-1 text-label-sm border border-red-200 text-red-500 px-2 py-1 rounded hover:bg-red-50 hover:border-red-400 transition-colors disabled:opacity-50"
+                              title="Şikayəti sil"
+                            >
+                              {deletingId === c.id.toString()
+                                ? <span className="material-symbols-outlined text-[16px] animate-spin">autorenew</span>
+                                : <span className="material-symbols-outlined text-[16px]">delete</span>
+                              }
                             </button>
                           </div>
                         </div>
